@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SenkoSEO</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar__brand">
+        <span class="sidebar__eyebrow">Suite de PDP</span>
+        <h1>SenkoSEO</h1>
+        <p>Transforme ficha técnica em uma proposta de rich content mais viável, explicável e editável.</p>
+      </div>
+
+      <nav class="sidebar__nav">
+        <button class="step-link is-active" data-step-target="step-product">
+          <span>01</span>
+          Produto
+        </button>
+        <button class="step-link" data-step-target="step-strategy">
+          <span>02</span>
+          Estratégia
+        </button>
+        <button class="step-link" data-step-target="step-blocks">
+          <span>03</span>
+          Blocos
+        </button>
+        <button class="step-link" data-step-target="step-assets">
+          <span>04</span>
+          Imagens e Copy
+        </button>
+        <button class="step-link" data-step-target="step-output">
+          <span>05</span>
+          Saída
+        </button>
+      </nav>
+
+      <section class="sidebar__card">
+        <h2>Premissas viáveis</h2>
+        <ul>
+          <li>Biblioteca de blocos em vez de layout infinito.</li>
+          <li>Revisão humana faz parte do fluxo oficial.</li>
+          <li>Pesquisa confiável primeiro, internet aberta depois.</li>
+          <li>Justificativa para cada decisão importante.</li>
+        </ul>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="hero-panel">
+        <div>
+          <span class="hero-panel__eyebrow">Versão forte da V1</span>
+          <h2>Gerador guiado para estrutura, narrativa, prompts e HTML/CSS base.</h2>
+        </div>
+        <div class="hero-panel__actions">
+          <button id="load-demo" class="button button--ghost" type="button">Carregar exemplo</button>
+          <button id="reset-project" class="button button--danger" type="button">Limpar projeto</button>
+        </div>
+      </header>
+
+      <section class="step is-active" id="step-product">
+        <div class="section-heading">
+          <div>
+            <span class="section-heading__eyebrow">Passo 1</span>
+            <h3>Contexto do produto</h3>
+          </div>
+          <p>O sistema parte de um briefing sólido. Em vez de adivinhar tudo, ele organiza insumos e limita as hipóteses frágeis.</p>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h4>Identificação</h4>
+            <div class="field-grid">
+              <label>
+                Nome do projeto
+                <input id="project-name" type="text" placeholder="Ex.: VM50 Metalfrio PDP">
+              </label>
+              <label>
+                Marca
+                <input id="brand" type="text" placeholder="Ex.: Metalfrio">
+              </label>
+              <label>
+                Produto / modelo
+                <input id="product-name" type="text" placeholder="Ex.: Freezer expositor Versa VM50">
+              </label>
+              <label>
+                Categoria
+                <input id="category" type="text" placeholder="Ex.: Refrigeração comercial">
+              </label>
+              <label>
+                Público-alvo
+                <input id="audience" type="text" placeholder="Ex.: donos de mercado, conveniência, food service">
+              </label>
+              <label>
+                Tom desejado
+                <input id="tone" type="text" placeholder="Ex.: técnico-comercial, premium, direto">
+              </label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h4>Entradas principais</h4>
+            <label>
+              URL ou caminho da imagem principal
+              <input id="image-url" type="text" placeholder="Ex.: https://cdn.exemplo.com/produto.png">
+            </label>
+            <label>
+              Ficha técnica / descrição base
+              <textarea id="technical-sheet" rows="8" placeholder="Cole aqui a ficha técnica, bullets, benefícios e observações."></textarea>
+            </label>
+            <label>
+              Regras do projeto
+              <textarea id="project-rules" rows="6" placeholder="Uma regra por linha. Ex.: Títulos com até 10 palavras. Nunca usar superlativos vazios."></textarea>
+            </label>
+          </section>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h4>Fontes confiáveis</h4>
+            <label>
+              Site oficial / fornecedor
+              <textarea id="official-sources" rows="4" placeholder="Liste URLs ou notas do fabricante."></textarea>
+            </label>
+            <label>
+              Referências de varejo
+              <textarea id="retail-sources" rows="4" placeholder="Liste páginas de e-commerce úteis para repertório e dúvidas frequentes."></textarea>
+            </label>
+          </section>
+
+          <section class="panel panel--accent">
+            <h4>Decisões removidas</h4>
+            <ul class="decision-list">
+              <li>Não tenta “descobrir a verdade” em qualquer fonte da internet.</li>
+              <li>Não promete design perfeito sem revisão humana.</li>
+              <li>Não depende de múltiplos modelos brigando pela mesma tarefa.</li>
+              <li>Não cria narrativa do zero sem explicar por quê.</li>
+            </ul>
+          </section>
+        </div>
+
+        <div class="toolbar">
+          <button id="analyze-product" class="button" type="button">Gerar estratégia base</button>
+          <span id="save-status" class="status-text">Salvamento local automático ativado.</span>
+        </div>
+      </section>
+
+      <section class="step" id="step-strategy">
+        <div class="section-heading">
+          <div>
+            <span class="section-heading__eyebrow">Passo 2</span>
+            <h3>Estratégia justificável</h3>
+          </div>
+          <p>Esta etapa organiza o que comunicar, quais riscos evitar e quais decisões a ferramenta está tomando.</p>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h4>Resumo estratégico</h4>
+            <div id="strategy-summary" class="rich-output empty-state">
+              Preencha o produto e clique em “Gerar estratégia base”.
+            </div>
+          </section>
+
+          <section class="panel">
+            <h4>Paleta sugerida</h4>
+            <div id="palette-preview" class="palette-preview empty-state">
+              A paleta aparece aqui com justificativa.
+            </div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <h4>Riscos e limites</h4>
+          <div id="risk-list" class="rich-output empty-state">
+            Os limites do projeto serão listados aqui para manter a geração honesta.
+          </div>
+        </section>
+      </section>
+
+      <section class="step" id="step-blocks">
+        <div class="section-heading">
+          <div>
+            <span class="section-heading__eyebrow">Passo 3</span>
+            <h3>Biblioteca de blocos</h3>
+          </div>
+          <p>Em vez de layout infinito, o projeto usa blocos reutilizáveis. Você pode ativar, desativar e reordenar.</p>
+        </div>
+
+        <div class="toolbar">
+          <button id="recommend-blocks" class="button" type="button">Aplicar recomendação</button>
+        </div>
+
+        <div id="blocks-library" class="block-grid"></div>
+      </section>
+
+      <section class="step" id="step-assets">
+        <div class="section-heading">
+          <div>
+            <span class="section-heading__eyebrow">Passo 4</span>
+            <h3>Copy e prompts de imagem</h3>
+          </div>
+          <p>O app gera um rascunho claro para cada bloco: objetivo, copy base, imagem necessária e prompt para IA externa.</p>
+        </div>
+
+        <div class="toolbar">
+          <button id="build-assets" class="button" type="button">Gerar guias</button>
+        </div>
+
+        <div id="asset-guides" class="stacked-panels"></div>
+      </section>
+
+      <section class="step" id="step-output">
+        <div class="section-heading">
+          <div>
+            <span class="section-heading__eyebrow">Passo 5</span>
+            <h3>HTML + CSS base</h3>
+          </div>
+          <p>A saída é uma primeira versão limpa, responsiva e editável. Ela não tenta ser final sem sua revisão.</p>
+        </div>
+
+        <div class="toolbar">
+          <button id="generate-output" class="button" type="button">Gerar código</button>
+          <button id="copy-html" class="button button--ghost" type="button">Copiar HTML</button>
+          <button id="copy-css" class="button button--ghost" type="button">Copiar CSS</button>
+        </div>
+
+        <div class="output-grid">
+          <section class="panel">
+            <h4>HTML</h4>
+            <textarea id="html-output" class="code-output" spellcheck="false"></textarea>
+          </section>
+          <section class="panel">
+            <h4>CSS</h4>
+            <textarea id="css-output" class="code-output" spellcheck="false"></textarea>
+          </section>
+        </div>
+
+        <section class="panel">
+          <h4>Checklist antes de publicar</h4>
+          <div id="final-checklist" class="rich-output empty-state">
+            Gere o código para receber a checklist de revisão final.
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="./src/app.js"></script>
+</body>
+</html>
