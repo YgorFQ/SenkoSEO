@@ -3602,5 +3602,13 @@ SenkoLib.register([
   }
 </style>`
   },
+  /*@@@@Senko - testeawdadw */
+  {
+    id: 'testeawdadw',
+    name: 'testad',
+    tags: ['tesadwd'],
+    html: `adwadawdawd`,
+    css: `dawdawdawdawdaw`
+  }
 
 ]);
