@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SenkoLib</title>
+  <meta name="description" content="Biblioteca de layouts HTML/CSS para PDPs de e-commerce.">
+
+  <!-- Service Worker registrado antes de tudo -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(function(){});
+    }
+  </script>
+
+  <!-- Estilos -->
+  <link rel="stylesheet" href="assets/styles.css">
+  <link rel="stylesheet" href="assets/col-styles.css">
+</head>
+<body>
+
+  <!-- ═══ Header ══════════════════════════════════════════════════════ -->
+  <header class="site-header">
+    <div class="header-inner">
+
+      <!-- Logo -->
+      <div class="logo" id="logoHome">
+        <div class="logo-img" style="background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:12px;">S</div>
+        <span class="logo-text">Senko<strong>Lib</strong></span>
+      </div>
+
+      <!-- Controles -->
+      <div class="header-controls">
+
+        <!-- Busca -->
+        <div class="search-wrap">
+          <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="searchInput" placeholder="Buscar layouts…" autocomplete="off" spellcheck="false">
+        </div>
+
+        <!-- HTML Básico -->
+        <button class="btn-copyall" id="copyAllBtn" onclick="copiarBasics()">HTML Básico</button>
+
+        <!-- + Adicionar (abre Picker) -->
+        <button class="btn-add" id="openAddModal">+ Adicionar</button>
+
+        <!-- Toggle de tema -->
+        <button class="theme-toggle" id="themeToggleBtn" title="Alternar tema"></button>
+
+        <!-- GitHub injeta aqui: botão de cadeado + engrenagem -->
+      </div>
+
+    </div>
+  </header>
+  <!-- /Header -->
+
+  <!-- Barra de abas (injetada pelo col-script.js) -->
+
+  <!-- ═══ Dashboard principal — Aba Biblioteca ═════════════════════════ -->
+  <main id="dashboard">
+    <div class="stats-bar" id="statsBar">Carregando…</div>
+    <div class="grid" id="layoutGrid"></div>
+  </main>
+
+  <!-- Dashboard de Coleções (injetado pelo col-script.js) -->
+
+  <!-- Toast de feedback -->
+  <div class="toast" id="toast">✓ Copiado!</div>
+
+  <!-- Picker "Adicionar" (construído dinamicamente por modal-add.js) -->
+  <!-- Outros modais: criados dinamicamente pelos módulos de modal -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       ORDEM DE CARREGAMENTO — CRÍTICA
+       ═══════════════════════════════════════════════════════════════════ -->
+
+  <!-- 1. Motor de registro -->
+  <script src="core/senkolib-core.js"></script>
+
+  <!-- 2. Layouts e variantes -->
+  <script src="layouts/layouts001.js"></script>
+  <script src="variants/section-1.js"></script>
+
+  <!-- 3. Utilitários e módulos de core -->
+  <script src="core/utils.js"></script>
+  <script src="core/favorites.js"></script>
+  <script src="core/theme.js"></script>
+  <script src="core/grid.js"></script>
+  <script src="core/modal-edit.js"></script>
+  <script src="core/modal-add.js"></script>
+  <script src="core/modal-variants.js"></script>
+  <script src="core/modal-edit-variant.js"></script>
+  <script src="core/modal-new-variant.js"></script>
+
+  <!-- 4. UI principal (bootstrap — max ~80 linhas) -->
+  <script src="core/script.js"></script>
+
+  <!-- 5. Módulos GitHub -->
+  <script src="modules/github/senko-github-v2.js"></script>
+  <script src="modules/github/senko-github-variants.js"></script>
+  <script src="modules/github/senko-github-delete.js"></script>
+
+  <!-- 6. Sistema de Coleções -->
+  <script src="colecoes/col-groups.js"></script>
+  <script src="colecoes/col-groups-data.js"></script>
+  <script src="colecoes/col-core.js"></script>
+  <script src="colecoes/data/colecao-joel.js"></script>
+  <script src="colecoes/data/colecao-pedro.js"></script>
+  <script src="colecoes/data/carneiro-colecoes.js"></script>
+  <script src="colecoes/col-script.js"></script>
+  <script src="colecoes/col-modals.js"></script>
+  <script src="modules/github/senko-github-col.js"></script>
+
+</body>
+</html>
