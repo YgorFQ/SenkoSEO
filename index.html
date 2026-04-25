@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1f2223">
+  <title>SenkoLib</title>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+  <link rel="stylesheet" href="assets/col-styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <button class="logo" id="logoHome" type="button" aria-label="Voltar para todos os layouts">
+        <span class="logo-mark">S</span>
+        <span class="logo-text">Senko<strong>Lib</strong></span>
+      </button>
+
+      <div class="header-controls">
+        <div class="search-wrap">
+          <span class="search-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+          </span>
+          <input type="text" id="searchInput" placeholder="Buscar layouts..." autocomplete="off">
+        </div>
+
+        <button class="btn-copyall" id="copyAllBtn" type="button">HTML Basico</button>
+        <button class="btn-add" id="openAddModal" type="button">+ Adicionar</button>
+        <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Alternar tema"></button>
+        <span id="githubHeaderActions" class="github-header-actions"></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="dashboard" id="dashboard">
+    <div class="stats-bar" id="statsBar"></div>
+    <div class="grid" id="layoutGrid"></div>
+    <div class="no-results hidden" id="noResults">
+      <strong>Nenhum layout encontrado.</strong>
+      <span>Ajuste a busca para ver outros resultados.</span>
+    </div>
+  </main>
+
+  <div class="modal-overlay hidden" id="pickerOverlay">
+    <div class="modal picker-modal" id="pickerModal" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+      <div class="modal-header">
+        <div>
+          <div class="modal-category">NOVO ITEM</div>
+          <h2 class="modal-title" id="pickerTitle">Adicionar Layout</h2>
+        </div>
+        <button class="modal-close" id="pickerCloseBtn" type="button" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="picker-tabs" id="pickerTabs"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">Copiado!</div>
+
+  <script src="core/senkolib-core.js"></script>
+  <script src="layouts/layouts001.js"></script>
+  <script src="variants/section-1.js"></script>
+
+  <script src="core/utils.js"></script>
+  <script src="core/favorites.js"></script>
+  <script src="core/grid.js"></script>
+  <script src="core/modal-edit.js"></script>
+  <script src="core/modal-add.js"></script>
+  <script src="core/modal-variants.js"></script>
+  <script src="core/modal-edit-variant.js"></script>
+  <script src="core/modal-new-variant.js"></script>
+  <script src="core/theme.js"></script>
+
+  <script src="colecoes/col-groups.js"></script>
+  <script src="colecoes/col-groups-data.js"></script>
+  <script src="colecoes/col-core.js"></script>
+  <script src="colecoes/data/colecao-joel.js"></script>
+  <script src="colecoes/data/colecao-pedro.js"></script>
+  <script src="colecoes/data/carneiro-colecoes.js"></script>
+  <script src="colecoes/col-script.js"></script>
+  <script src="colecoes/col-modals.js"></script>
+
+  <script src="core/script.js"></script>
+  <script src="modules/github/senko-github-v2.js"></script>
+  <script src="modules/github/senko-github-variants.js"></script>
+  <script src="modules/github/senko-github-delete.js"></script>
+  <script src="modules/github/senko-github-col.js"></script>
+</body>
+</html>
