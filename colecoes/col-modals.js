@@ -1,730 +1,613 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   col-modals.js — 7 modais do sistema de Coleções (todos dinâmicos)
-
-   RESPONSABILIDADE:
-     Cria e gerencia os 7 modais de Coleção (visualizar, criar, editar,
-     novo grupo, adicionar layout, editar layout, confirmação). Todos
-     são gerados via createElement na primeira abertura (lazy build com
-     guard de id). Após construção, abrir/fechar é apenas classList.
-
-   EXPÕE (globais):
-     colOpenCollectionModal(col)       → void
-     colOpenCreateModal()              → void
-     colOpenEditModal(col)             → void
-     colOpenNewGroupModal(callback)    → void
-     colOpenAddLayoutModal(col)        → void
-     colOpenEditLayoutModal(col, lay)  → void
-     colOpenConfirm(opts)              → void
-     colCloseAllModals()               → void
-     colGetCreateFormData()            → object | null
-     colGetEditFormData()              → object | null
-     colGetAddLayoutFormData()         → object | null
-     colGetEditLayoutFormData()        → object | null
-
-   DEPENDÊNCIAS:
-     utils.js, col-groups.js, col-core.js, col-script.js
-
-   ORDEM DE CARREGAMENTO:
-     Após col-script.js
-═══════════════════════════════════════════════════════════════════════ */
-
-/* ── Estado interno ─────────────────────────────────────────────────── */
-var _colCurrentCollection = null;
-var _colCurrentLayout     = null;
-
-/* ── Paleta de cores preset para grupos ────────────────────────────── */
-var _COL_COLORS = [
-  '#1a9e52','#06b6d4','#f59e0b','#e03030','#8b5cf6',
-  '#ec4899','#f97316','#0ea5e9','#14b8a6','#6366f1',
-];
-
-/* ── Helpers internos ───────────────────────────────────────────────── */
-
-function _colMakeOverlay(id) {
-  var el = document.createElement('div');
-  el.id        = id;
-  el.className = 'modal-overlay hidden';
-  document.body.appendChild(el);
-  return el;
-}
-
-function _colShowOverlay(id) {
-  var el = document.getElementById(id);
-  if (el) { el.classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
-}
-
-function _colHideOverlay(id) {
-  var el = document.getElementById(id);
-  if (el) el.classList.add('hidden');
-  if (!document.querySelector('.modal-overlay:not(.hidden)'))
-    document.body.style.overflow = '';
-}
-
-// Fecha ao clicar fora do modal (duplo clique em 400ms)
-function _colOverlayClick(overlayId, modalId, closeFn) {
-  var count = 0, timer;
-  var overlay = document.getElementById(overlayId);
-  if (!overlay) return;
-  overlay.addEventListener('click', function (e) {
-    var modal = document.getElementById(modalId);
-    if (modal && modal.contains(e.target)) return;
-    count++;
-    if (count === 1) { timer = setTimeout(function () { count = 0; }, 400); }
-    else { clearTimeout(timer); count = 0; closeFn(); }
-  });
-}
-
-function colCloseAllModals() {
-  ['colCollectionOverlay','colCreateOverlay','colEditOverlay','colNewGroupOverlay',
-   'colAddLayoutOverlay','colEditLayoutOverlay','colConfirmOverlay'].forEach(_colHideOverlay);
-}
-
-function _colSlugify(name) {
-  if (typeof ColGroups !== 'undefined') return ColGroups.slugify(name);
-  return name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-}
-
-function _colValidSlug(slug) {
-  return /^[a-z0-9-]+$/.test(slug) && slug.length >= 2;
-}
-
-function _colRefreshPreview(iframeId, html, css) {
-  var iframe = document.getElementById(iframeId);
-  if (!iframe) return;
-  iframe.srcdoc = '';
-  setTimeout(function () { iframe.srcdoc = buildSrcDoc(html, css); }, 50);
-}
-
-// Popula <select> com grupos disponíveis no ColGroups
-function _colPopulateGroupSelect(selectEl, selectedSlug) {
-  selectEl.innerHTML = '<option value="">— Selecione um grupo —</option>';
-  ColGroups.getAll().forEach(function (g) {
-    var opt = document.createElement('option');
-    opt.value       = g.slug;
-    opt.textContent = g.name;
-    if (g.slug === selectedSlug) opt.selected = true;
-    selectEl.appendChild(opt);
-  });
-}
-
-function _colShowFieldError(id, show) {
-  var el = document.getElementById(id);
-  if (el) el.style.display = show ? 'block' : 'none';
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MODAL 1 — Visualizar Coleção
-═══════════════════════════════════════════════════════════════════════ */
-
-function _buildCollectionModal() {
-  if (document.getElementById('colCollectionOverlay')) return;
-
-  var overlay = _colMakeOverlay('colCollectionOverlay');
-  overlay.style.zIndex = '1000';
-
-  overlay.innerHTML =
-    '<div class="modal col-modal" id="colCollectionModal">' +
-      '<div class="col-modal-header">' +
-        '<div class="col-modal-header-left">' +
-          '<span class="col-modal-category">Coleção</span>' +
-          '<h2 class="col-modal-title" id="colModalTitle">–</h2>' +
-          '<span class="col-modal-group-badge" id="colModalGroupBadge"></span>' +
-        '</div>' +
-        '<div class="col-modal-header-right">' +
-          '<button class="btn btn-ghost btn-edit-icon" id="colModalEditBtn" title="Editar metadados">' +
-            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
-            ' Editar' +
-          '</button>' +
-          '<button class="modal-close" id="colCloseCollectionBtn">✕</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-modal-layouts-wrap">' +
-        '<div class="col-modal-layouts-grid" id="colLayoutsGrid"></div>' +
-      '</div>' +
-    '</div>';
-
-  overlay.querySelector('#colCloseCollectionBtn').addEventListener('click', function () {
-    _colHideOverlay('colCollectionOverlay');
-    _colCurrentCollection = null;
-  });
-
-  overlay.querySelector('#colModalEditBtn').addEventListener('click', function () {
-    if (_colCurrentCollection) colOpenEditModal(_colCurrentCollection);
-  });
-
-  _colOverlayClick('colCollectionOverlay', 'colCollectionModal', function () {
-    _colHideOverlay('colCollectionOverlay');
-  });
-}
-
-function colOpenCollectionModal(col) {
-  _buildCollectionModal();
-  _colCurrentCollection = col;
-
-  var grupo = ColGroups.getBySlug(col.group) || {};
-  var cor   = grupo.cor || 'var(--accent)';
-
-  document.getElementById('colCollectionModal').style.borderTopColor = cor;
-  document.getElementById('colModalTitle').textContent = col.name;
-
-  var badge = document.getElementById('colModalGroupBadge');
-  badge.textContent   = grupo.name || col.group || '';
-  badge.style.background = cor;
-
-  _colRenderLayoutsGrid(col);
-  _colShowOverlay('colCollectionOverlay');
-}
-
-// Renderiza o grid de layouts dentro da coleção
-function _colRenderLayoutsGrid(col) {
-  var grid = document.getElementById('colLayoutsGrid');
-  if (!grid) return;
-
-  var layouts  = (col.layouts || []).slice();
-  var fragment = document.createDocumentFragment();
-
-  layouts.forEach(function (lay, i) {
-    var block = document.createElement('div');
-    block.className = 'col-layout-block';
-    block.style.animationDelay = (i * 30) + 'ms';
-
-    var combined = (lay.css ? lay.css + '\n' : '') + (lay.html || '');
-
-    block.innerHTML =
-      '<div class="col-layout-preview">' +
-        '<iframe class="card-iframe" frameborder="0" scrolling="no" tabindex="-1"></iframe>' +
-        '<div class="col-layout-preview-overlay"></div>' +
-      '</div>' +
-      '<div class="col-layout-body">' +
-        '<div class="col-layout-name">' + lay.name + '</div>' +
-      '</div>' +
-      '<div class="col-layout-footer">' +
-        '<button class="btn btn-ghost" title="Copiar tudo">Copiar tudo</button>' +
-        '<button class="btn btn-ghost btn-edit-icon" title="Editar">' +
-          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
-        '</button>' +
-        '<span class="col-layout-delete-anchor" data-layout-id="' + lay.id + '"></span>' +
-      '</div>';
-
-    // Lazy load preview
-    var iframe = block.querySelector('.card-iframe');
-    lazyIframe(iframe, lay.html || '', lay.css || '');
-
-    // Copiar tudo (css + html concatenados)
-    block.querySelector('[title="Copiar tudo"]').addEventListener('click', function () {
-      copyToClipboard(combined, null, '');
-    });
-
-    // Editar layout
-    block.querySelector('.btn-edit-icon').addEventListener('click', function () {
-      colOpenEditLayoutModal(col, lay);
-    });
-
-    fragment.appendChild(block);
-  });
-
-  // Card "+ Adicionar Layout"
-  var addCard = document.createElement('div');
-  addCard.className = 'col-layout-add-card';
-  addCard.innerHTML = '<div class="col-layout-add-icon">+</div><span>Adicionar Layout</span>';
-  addCard.addEventListener('click', function () { colOpenAddLayoutModal(col); });
-  fragment.appendChild(addCard);
-
-  grid.innerHTML = '';
-  grid.appendChild(fragment);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MODAL 2 — Criar Coleção
-═══════════════════════════════════════════════════════════════════════ */
-
-function _buildCreateModal() {
-  if (document.getElementById('colCreateOverlay')) return;
-
-  var overlay = _colMakeOverlay('colCreateOverlay');
-  overlay.style.zIndex = '1100';
-
-  overlay.innerHTML =
-    '<div class="modal col-form-modal" id="colCreateModal">' +
-      '<div class="col-form-header">' +
-        '<div><span class="modal-category">Nova Coleção</span><h2 class="modal-title">Criar Coleção</h2></div>' +
-        '<button class="modal-close" id="colCloseCreateBtn">✕</button>' +
-      '</div>' +
-      '<div class="col-form-body">' +
-        '<div class="col-field">' +
-          '<label>Nome <span class="req">*</span></label>' +
-          '<input type="text" id="colCreateName" placeholder="Kit Lançamento 2026">' +
-          '<span class="col-field-error" id="colCreateNameError">Nome mínimo 3 caracteres.</span>' +
-        '</div>' +
-        '<div class="col-field">' +
-          '<label>Slug <span class="hint">(gerado automaticamente)</span></label>' +
-          '<input type="text" id="colCreateSlug" placeholder="kit-lancamento-2026">' +
-          '<span class="col-field-hint" id="colCreateSlugHint">colecoes/data/[slug].js</span>' +
-          '<span class="col-field-error" id="colCreateSlugError">Slug inválido (mín. 2 chars, só a-z, 0-9, hífen).</span>' +
-        '</div>' +
-        '<div class="col-field">' +
-          '<label>Grupo <span class="req">*</span></label>' +
-          '<div style="display:flex;gap:8px;align-items:center;">' +
-            '<select class="col-group-select" id="colCreateGroup" style="flex:1;"></select>' +
-            '<button class="col-group-new-btn" id="colCreateNewGroupBtn">+ Novo grupo</button>' +
-          '</div>' +
-          '<span class="col-field-error" id="colCreateGroupError">Selecione um grupo.</span>' +
-        '</div>' +
-        '<div class="col-field">' +
-          '<label>Tags <span class="hint">(separadas por vírgula)</span></label>' +
-          '<input type="text" id="colCreateTags" placeholder="responsivo, hero">' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-form-footer">' +
-        '<span id="colCreateGhAnchor"></span>' +
-        '<button class="btn col-btn-cancel" id="colCreateCancelBtn">Cancelar</button>' +
-      '</div>' +
-    '</div>';
-
-  overlay.querySelector('#colCloseCreateBtn').addEventListener('click', function () { _colHideOverlay('colCreateOverlay'); });
-  overlay.querySelector('#colCreateCancelBtn').addEventListener('click', function () { _colHideOverlay('colCreateOverlay'); });
-  _colOverlayClick('colCreateOverlay', 'colCreateModal', function () { _colHideOverlay('colCreateOverlay'); });
-
-  // Auto-slug a partir do nome
-  overlay.querySelector('#colCreateName').addEventListener('input', function () {
-    var slug = _colSlugify(this.value);
-    document.getElementById('colCreateSlug').value = slug;
-    document.getElementById('colCreateSlugHint').textContent = 'colecoes/data/' + (slug || '[slug]') + '.js';
-    _colShowFieldError('colCreateNameError', this.value.length > 0 && this.value.trim().length < 3);
-    _colShowFieldError('colCreateSlugError', slug.length > 0 && !_colValidSlug(slug));
-  });
-
-  overlay.querySelector('#colCreateSlug').addEventListener('input', function () {
-    var slug = this.value.trim();
-    document.getElementById('colCreateSlugHint').textContent = 'colecoes/data/' + (slug || '[slug]') + '.js';
-    _colShowFieldError('colCreateSlugError', !_colValidSlug(slug));
-  });
-
-  overlay.querySelector('#colCreateNewGroupBtn').addEventListener('click', function () {
-    colOpenNewGroupModal(function () {
-      _colPopulateGroupSelect(document.getElementById('colCreateGroup'), document.getElementById('colCreateGroup').value);
-    });
-  });
-}
-
-function colOpenCreateModal() {
-  _buildCreateModal();
-  document.getElementById('colCreateName').value = '';
-  document.getElementById('colCreateSlug').value = '';
-  document.getElementById('colCreateTags').value = '';
-  document.getElementById('colCreateSlugHint').textContent = 'colecoes/data/[slug].js';
-  ['colCreateNameError','colCreateSlugError','colCreateGroupError'].forEach(function (id) {
-    _colShowFieldError(id, false);
-  });
-  _colPopulateGroupSelect(document.getElementById('colCreateGroup'), null);
-  _colShowOverlay('colCreateOverlay');
-}
-
-function colGetCreateFormData() {
-  var name  = (document.getElementById('colCreateName')  || {}).value || '';
-  var slug  = (document.getElementById('colCreateSlug')  || {}).value || '';
-  var group = (document.getElementById('colCreateGroup') || {}).value || '';
-  var tags  = ((document.getElementById('colCreateTags') || {}).value || '')
-    .split(',').map(function (t) { return t.trim(); }).filter(Boolean);
-
-  var ok = name.trim().length >= 3 && _colValidSlug(slug) && group;
-  _colShowFieldError('colCreateNameError',  name.trim().length < 3);
-  _colShowFieldError('colCreateSlugError',  !_colValidSlug(slug));
-  _colShowFieldError('colCreateGroupError', !group);
-  return ok ? { name: name.trim(), slug: slug.trim(), group: group, tags: tags } : null;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MODAL 3 — Editar Coleção
-═══════════════════════════════════════════════════════════════════════ */
-
-function _buildEditModal_col() {
-  if (document.getElementById('colEditOverlay')) return;
-
-  var overlay = _colMakeOverlay('colEditOverlay');
-  overlay.style.zIndex = '1100';
-
-  overlay.innerHTML =
-    '<div class="modal col-form-modal" id="colEditModal">' +
-      '<div class="col-form-header">' +
-        '<div><span class="modal-category">Coleção</span><h2 class="modal-title">Editar Coleção</h2></div>' +
-        '<button class="modal-close" id="colCloseEditBtn">✕</button>' +
-      '</div>' +
-      '<div class="col-form-body">' +
-        '<input type="hidden" id="colEditSlug">' +
-        '<div class="col-field">' +
-          '<label>Nome <span class="req">*</span></label>' +
-          '<input type="text" id="colEditName">' +
-          '<span class="col-field-error" id="colEditNameError">Nome mínimo 3 caracteres.</span>' +
-        '</div>' +
-        '<div class="col-field">' +
-          '<label>Grupo <span class="req">*</span></label>' +
-          '<div style="display:flex;gap:8px;align-items:center;">' +
-            '<select class="col-group-select" id="colEditGroup" style="flex:1;"></select>' +
-            '<button class="col-group-new-btn" id="colEditNewGroupBtn">+ Novo grupo</button>' +
-          '</div>' +
-          '<span class="col-field-error" id="colEditGroupError">Selecione um grupo.</span>' +
-        '</div>' +
-        '<div class="col-field">' +
-          '<label>Tags <span class="hint">(separadas por vírgula)</span></label>' +
-          '<input type="text" id="colEditTags">' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-form-footer">' +
-        '<span id="colEditGhAnchor"></span>' +
-        '<button class="btn col-btn-cancel" id="colEditCancelBtn">Cancelar</button>' +
-      '</div>' +
-    '</div>';
-
-  overlay.querySelector('#colCloseEditBtn').addEventListener('click',  function () { _colHideOverlay('colEditOverlay'); });
-  overlay.querySelector('#colEditCancelBtn').addEventListener('click', function () { _colHideOverlay('colEditOverlay'); });
-  _colOverlayClick('colEditOverlay', 'colEditModal', function () { _colHideOverlay('colEditOverlay'); });
-
-  overlay.querySelector('#colEditNewGroupBtn').addEventListener('click', function () {
-    colOpenNewGroupModal(function () {
-      _colPopulateGroupSelect(document.getElementById('colEditGroup'), document.getElementById('colEditGroup').value);
-    });
-  });
-}
-
-function colOpenEditModal(col) {
-  _buildEditModal_col();
-  document.getElementById('colEditSlug').value = col.slug;
-  document.getElementById('colEditName').value = col.name;
-  document.getElementById('colEditTags').value = (col.tags || []).join(', ');
-  _colPopulateGroupSelect(document.getElementById('colEditGroup'), col.group);
-  ['colEditNameError','colEditGroupError'].forEach(function (id) { _colShowFieldError(id, false); });
-  _colShowOverlay('colEditOverlay');
-}
-
-function colGetEditFormData() {
-  var slug  = (document.getElementById('colEditSlug')  || {}).value || '';
-  var name  = (document.getElementById('colEditName')  || {}).value || '';
-  var group = (document.getElementById('colEditGroup') || {}).value || '';
-  var tags  = ((document.getElementById('colEditTags') || {}).value || '')
-    .split(',').map(function (t) { return t.trim(); }).filter(Boolean);
-
-  var ok = name.trim().length >= 3 && group;
-  _colShowFieldError('colEditNameError',  name.trim().length < 3);
-  _colShowFieldError('colEditGroupError', !group);
-  return ok ? { slug: slug, name: name.trim(), group: group, tags: tags } : null;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MODAL 4 — Novo Grupo
-═══════════════════════════════════════════════════════════════════════ */
-
-function _buildNewGroupModal() {
-  if (document.getElementById('colNewGroupOverlay')) return;
-
-  var overlay = _colMakeOverlay('colNewGroupOverlay');
-  overlay.style.zIndex = '1200';
-
-  var swatchesHtml = _COL_COLORS.map(function (cor, i) {
-    return '<button class="col-color-swatch' + (i === 0 ? ' active' : '') + '" style="background:' + cor + '" data-cor="' + cor + '"></button>';
-  }).join('');
-
-  overlay.innerHTML =
-    '<div class="modal col-newgroup-modal" id="colNewGroupModal">' +
-      '<div class="col-form-header">' +
-        '<div><span class="modal-category">Novo Grupo</span><h2 class="modal-title">Criar Grupo</h2></div>' +
-        '<button class="modal-close" id="colCloseNewGroupBtn">✕</button>' +
-      '</div>' +
-      '<div class="col-form-body">' +
-        '<div class="col-field">' +
-          '<label>Nome <span class="req">*</span></label>' +
-          '<input type="text" id="colNewGroupName" placeholder="Ex: Projetos 2026">' +
-        '</div>' +
-        '<div class="col-field">' +
-          '<label>Cor</label>' +
-          '<div class="col-color-palette">' + swatchesHtml + '</div>' +
-          '<div class="col-color-custom-wrap">' +
-            '<div class="col-color-preview" id="colGroupColorPreview" style="background:' + _COL_COLORS[0] + '"></div>' +
-            '<input type="text" class="col-color-hex-input" id="colGroupColorHex" value="' + _COL_COLORS[0] + '" maxlength="7">' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-form-footer">' +
-        '<button class="btn col-btn-cancel" id="colNewGroupCancelBtn">Cancelar</button>' +
-        '<button class="btn col-btn-primary" id="colNewGroupConfirmBtn">Criar grupo</button>' +
-      '</div>' +
-    '</div>';
-
-  // Fechar
-  overlay.querySelector('#colCloseNewGroupBtn').addEventListener('click',  function () { _colHideOverlay('colNewGroupOverlay'); });
-  overlay.querySelector('#colNewGroupCancelBtn').addEventListener('click', function () { _colHideOverlay('colNewGroupOverlay'); });
-
-  // Swatches
-  overlay.querySelectorAll('.col-color-swatch').forEach(function (swatch) {
-    swatch.addEventListener('click', function () {
-      overlay.querySelectorAll('.col-color-swatch').forEach(function (s) { s.classList.remove('active'); });
-      swatch.classList.add('active');
-      var cor = swatch.dataset.cor;
-      document.getElementById('colGroupColorHex').value     = cor;
-      document.getElementById('colGroupColorPreview').style.background = cor;
-    });
-  });
-
-  // Hex manual
-  overlay.querySelector('#colGroupColorHex').addEventListener('input', function () {
-    var cor = this.value;
-    if (/^#[0-9a-fA-F]{6}$/.test(cor))
-      document.getElementById('colGroupColorPreview').style.background = cor;
-  });
-}
-
-function colOpenNewGroupModal(callback) {
-  _buildNewGroupModal();
-  document.getElementById('colNewGroupName').value = '';
-
-  var confirmBtn = document.getElementById('colNewGroupConfirmBtn');
-  // Remove listener anterior e adiciona novo com callback atual
-  var newBtn = confirmBtn.cloneNode(true);
-  confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
-  newBtn.addEventListener('click', function () {
-    var name = document.getElementById('colNewGroupName').value.trim();
-    if (!name) return;
-    var cor  = document.getElementById('colGroupColorHex').value || _COL_COLORS[0];
-    var slug = ColGroups.slugify(name);
-    ColGroups.addPending({ slug: slug, name: name, cor: cor });
-    _colHideOverlay('colNewGroupOverlay');
-    if (typeof callback === 'function') callback();
-  });
-
-  _colShowOverlay('colNewGroupOverlay');
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MODAL 5 — Adicionar Layout à Coleção
-═══════════════════════════════════════════════════════════════════════ */
-
-function _buildAddLayoutModal() {
-  if (document.getElementById('colAddLayoutOverlay')) return;
-
-  var overlay = _colMakeOverlay('colAddLayoutOverlay');
-  overlay.style.zIndex = '1100';
-
-  overlay.innerHTML =
-    '<div class="modal col-layout-form-modal" id="colAddLayoutModal">' +
-      '<div class="col-form-header">' +
-        '<div><span class="modal-category">Layout</span><h2 class="modal-title">Adicionar Layout</h2></div>' +
-        '<button class="modal-close" id="colCloseAddLayoutBtn">✕</button>' +
-      '</div>' +
-      '<div style="padding:.75rem 1.25rem 0;">' +
-        '<div class="col-field-row">' +
-          '<div class="col-field">' +
-            '<label>ID <span class="req">*</span></label>' +
-            '<input type="text" id="colAddLayoutId" placeholder="hero-secao">' +
-          '</div>' +
-          '<div class="col-field">' +
-            '<label>Nome <span class="req">*</span></label>' +
-            '<input type="text" id="colAddLayoutName" placeholder="Hero Seção">' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-edit-mode-bar">' +
-        '<button class="col-edit-mode-btn active" data-al-mode="content">Conteúdo</button>' +
-        '<button class="col-edit-mode-btn"        data-al-mode="preview">Preview</button>' +
-      '</div>' +
-      '<div class="col-edit-main">' +
-        '<div class="col-edit-panel active" id="colAddPanelContent">' +
-          '<textarea class="col-edit-textarea" id="colAddLayoutContent" placeholder="Cole aqui o HTML (e CSS embutido) do layout..."></textarea>' +
-        '</div>' +
-        '<div class="col-edit-panel" id="colAddPanelPreview">' +
-          '<iframe class="col-edit-iframe" id="colAddLayoutIframe" frameborder="0"></iframe>' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-form-footer">' +
-        '<span id="colAddLayoutGhAnchor"></span>' +
-        '<button class="btn col-btn-cancel" id="colAddLayoutCancelBtn">Cancelar</button>' +
-      '</div>' +
-    '</div>';
-
-  overlay.querySelector('#colCloseAddLayoutBtn').addEventListener('click',  function () { _colHideOverlay('colAddLayoutOverlay'); });
-  overlay.querySelector('#colAddLayoutCancelBtn').addEventListener('click', function () { _colHideOverlay('colAddLayoutOverlay'); });
-  _colOverlayClick('colAddLayoutOverlay', 'colAddLayoutModal', function () { _colHideOverlay('colAddLayoutOverlay'); });
-
-  overlay.querySelectorAll('[data-al-mode]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var mode = btn.dataset.alMode;
-      overlay.querySelectorAll('[data-al-mode]').forEach(function (b) {
-        b.classList.toggle('active', b.dataset.alMode === mode);
-      });
-      overlay.querySelectorAll('.col-edit-panel').forEach(function (p) {
-        p.classList.toggle('active', p.id === 'colAddPanel' + mode.charAt(0).toUpperCase() + mode.slice(1));
-      });
-      if (mode === 'preview') {
-        _colRefreshPreview('colAddLayoutIframe', document.getElementById('colAddLayoutContent').value, '');
-      }
-    });
-  });
-}
-
-function colOpenAddLayoutModal(col) {
-  _buildAddLayoutModal();
-  _colCurrentCollection = col;
-  document.getElementById('colAddLayoutId').value      = '';
-  document.getElementById('colAddLayoutName').value    = '';
-  document.getElementById('colAddLayoutContent').value = '';
-  _colShowOverlay('colAddLayoutOverlay');
-}
-
-function colGetAddLayoutFormData() {
-  var id      = (document.getElementById('colAddLayoutId')      || {}).value || '';
-  var name    = (document.getElementById('colAddLayoutName')    || {}).value || '';
-  var content = (document.getElementById('colAddLayoutContent') || {}).value || '';
-  if (!id.trim() || !name.trim()) return null;
-  return { id: id.trim(), name: name.trim(), html: content, css: '' };
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MODAL 6 — Editar Layout da Coleção
-═══════════════════════════════════════════════════════════════════════ */
-
-function _buildEditLayoutModal() {
-  if (document.getElementById('colEditLayoutOverlay')) return;
-
-  var overlay = _colMakeOverlay('colEditLayoutOverlay');
-  overlay.style.zIndex = '1100';
-
-  overlay.innerHTML =
-    '<div class="modal col-layout-form-modal" id="colEditLayoutModal">' +
-      '<div class="col-form-header">' +
-        '<div><span class="modal-category">Layout</span><h2 class="modal-title" id="colEditLayoutTitle">Editar Layout</h2></div>' +
-        '<button class="modal-close" id="colCloseEditLayoutBtn">✕</button>' +
-      '</div>' +
-      '<div style="padding:.75rem 1.25rem 0;">' +
-        '<input type="hidden" id="colEditLayoutId">' +
-        '<div class="col-field">' +
-          '<label>Nome</label>' +
-          '<input type="text" id="colEditLayoutName">' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-edit-mode-bar">' +
-        '<button class="col-edit-mode-btn" data-el-mode="content">Conteúdo</button>' +
-        '<button class="col-edit-mode-btn active" data-el-mode="preview">Visualizar</button>' +
-      '</div>' +
-      '<div class="col-edit-main">' +
-        '<div class="col-edit-panel" id="colEditPanelContent">' +
-          '<textarea class="col-edit-textarea" id="colEditLayoutContent"></textarea>' +
-        '</div>' +
-        '<div class="col-edit-panel active" id="colEditPanelPreview">' +
-          '<iframe class="col-edit-iframe" id="colEditLayoutIframe" frameborder="0"></iframe>' +
-        '</div>' +
-      '</div>' +
-      '<div class="col-form-footer">' +
-        '<span id="colEditLayoutGhAnchor"></span>' +
-        '<button class="btn col-btn-cancel" id="colEditLayoutCancelBtn">Cancelar</button>' +
-      '</div>' +
-    '</div>';
-
-  overlay.querySelector('#colCloseEditLayoutBtn').addEventListener('click',  function () { _colHideOverlay('colEditLayoutOverlay'); });
-  overlay.querySelector('#colEditLayoutCancelBtn').addEventListener('click', function () { _colHideOverlay('colEditLayoutOverlay'); });
-  _colOverlayClick('colEditLayoutOverlay', 'colEditLayoutModal', function () { _colHideOverlay('colEditLayoutOverlay'); });
-
-  overlay.querySelectorAll('[data-el-mode]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var mode = btn.dataset.elMode;
-      overlay.querySelectorAll('[data-el-mode]').forEach(function (b) {
-        b.classList.toggle('active', b.dataset.elMode === mode);
-      });
-      overlay.querySelectorAll('.col-edit-panel').forEach(function (p) {
-        p.classList.toggle('active', p.id === 'colEditPanel' + mode.charAt(0).toUpperCase() + mode.slice(1));
-      });
-      if (mode === 'preview') {
-        _colRefreshPreview('colEditLayoutIframe', document.getElementById('colEditLayoutContent').value, '');
-      }
-    });
-  });
-}
-
-function colOpenEditLayoutModal(col, layout) {
-  _buildEditLayoutModal();
-  _colCurrentCollection = col;
-  _colCurrentLayout     = layout;
-
-  document.getElementById('colEditLayoutTitle').textContent = layout.name;
-  document.getElementById('colEditLayoutId').value          = layout.id;
-  document.getElementById('colEditLayoutName').value        = layout.name;
-
-  // Layout legado com CSS separado: mescla css + html na textarea
-  var content = layout.css ? layout.css + '\n' + layout.html : (layout.html || '');
-  document.getElementById('colEditLayoutContent').value = content;
-
-  _colShowOverlay('colEditLayoutOverlay');
-  setTimeout(function () { _colRefreshPreview('colEditLayoutIframe', content, ''); }, 10);
-}
-
-function colGetEditLayoutFormData() {
-  var id      = (document.getElementById('colEditLayoutId')      || {}).value || '';
-  var name    = (document.getElementById('colEditLayoutName')    || {}).value || '';
-  var content = (document.getElementById('colEditLayoutContent') || {}).value || '';
-  if (!id || !name.trim()) return null;
-  return { id: id, name: name.trim(), html: content, css: '' };
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MODAL 7 — Confirmação genérica
-═══════════════════════════════════════════════════════════════════════ */
-
-function _buildConfirmModal() {
-  if (document.getElementById('colConfirmOverlay')) return;
-
-  var overlay = _colMakeOverlay('colConfirmOverlay');
-  overlay.style.zIndex = '1300';
-
-  overlay.innerHTML =
-    '<div class="modal col-confirm-modal" id="colConfirmModal" style="max-width:360px;">' +
-      '<div style="padding:1.5rem 1.5rem 0;">' +
-        '<h3 class="col-confirm-title" id="colConfirmTitle">Confirmar</h3>' +
-        '<p class="col-confirm-body"  id="colConfirmBody"></p>' +
-        '<div class="col-confirm-actions">' +
-          '<button class="btn col-btn-cancel"  id="colConfirmCancelBtn">Cancelar</button>' +
-          '<button class="btn col-btn-primary" id="colConfirmOkBtn">OK</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>';
-
-  overlay.querySelector('#colConfirmCancelBtn').addEventListener('click', function () {
-    _colHideOverlay('colConfirmOverlay');
-  });
-}
-
-function colOpenConfirm(opts) {
-  _buildConfirmModal();
-  document.getElementById('colConfirmTitle').textContent = opts.title || 'Confirmar';
-  document.getElementById('colConfirmBody').textContent  = opts.body  || '';
-
-  var okBtn = document.getElementById('colConfirmOkBtn');
-  okBtn.textContent = opts.labelOk || 'OK';
-  okBtn.className   = 'btn ' + (opts.danger ? 'col-btn-delete' : 'col-btn-primary');
-
-  var newOk = okBtn.cloneNode(true);
-  okBtn.parentNode.replaceChild(newOk, okBtn);
-  newOk.textContent = opts.labelOk || 'OK';
-  newOk.className   = 'btn ' + (opts.danger ? 'col-btn-delete' : 'col-btn-primary');
-  newOk.addEventListener('click', function () {
-    _colHideOverlay('colConfirmOverlay');
-    if (typeof opts.onConfirm === 'function') opts.onConfirm();
-  });
-
-  _colShowOverlay('colConfirmOverlay');
-}
-
-/* ── Escape handler de coleções ─────────────────────────────────────── */
-document.addEventListener('DOMContentLoaded', function () {
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    var order = [
-      'colConfirmOverlay','colEditLayoutOverlay','colAddLayoutOverlay',
-      'colNewGroupOverlay','colEditOverlay','colCreateOverlay','colCollectionOverlay',
-    ];
-    for (var i = 0; i < order.length; i++) {
-      var el = document.getElementById(order[i]);
-      if (el && !el.classList.contains('hidden')) {
-        _colHideOverlay(order[i]);
+/*
+ * Modais de Colecoes
+ * Responsabilidade: criar e controlar os 7 modais lazy do sistema de colecoes.
+ * Dependencias: ColGroups, ColLib e helpers globais da Biblioteca.
+ * Expoe: funcoes publicas colOpen*, colGet* usadas pela UI e GitHub.
+ */
+(function (global) {
+  var _colCurrentCollection = null;
+  var _colCurrentLayout = null;
+  var _colNewGroupCallback = null;
+  var _colConfirmCallback = null;
+  var _overlayClicks = {};
+  var _colors = ['#1a9e52', '#06b6d4', '#f59e0b', '#e36a00', '#8b5cf6', '#ef4444', '#14b8a6', '#64748b', '#f43f5e', '#84cc16'];
+
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function _colMakeOverlay(id) {
+    var overlay = $(id);
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = id;
+    overlay.className = 'modal-overlay hidden';
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function _anyOverlayOpen() {
+    return !!document.querySelector('.modal-overlay:not(.hidden)');
+  }
+
+  function _colShowOverlay(id) {
+    var overlay = $(id);
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function _colHideOverlay(id) {
+    var overlay = $(id);
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    if (!_anyOverlayOpen()) document.body.style.overflow = '';
+  }
+
+  function _colOverlayClick(overlayId, modalId, closeFn) {
+    var overlay = $(overlayId);
+    if (!overlay || overlay._colOverlayBound) return;
+    overlay._colOverlayBound = true;
+    overlay.addEventListener('click', function (event) {
+      var now;
+      if (event.target.id !== overlayId) return;
+      now = Date.now();
+      if (_overlayClicks[overlayId] && now - _overlayClicks[overlayId] < 400) {
+        closeFn();
+        _overlayClicks[overlayId] = 0;
         return;
       }
+      _overlayClicks[overlayId] = now;
+    });
+  }
+
+  function colCloseAllModals() {
+    var ids = ['colConfirmOverlay', 'colEditLayoutOverlay', 'colAddLayoutOverlay', 'colNewGroupOverlay', 'colEditOverlay', 'colCreateOverlay', 'colCollectionOverlay'];
+    var i;
+    for (i = 0; i < ids.length; i += 1) _colHideOverlay(ids[i]);
+  }
+
+  function _colSlugify(name) {
+    if (global.ColGroups && ColGroups.slugify) return ColGroups.slugify(name);
+    return String(name || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  }
+
+  function _colValidSlug(slug) {
+    return /^[a-z0-9-]+$/.test(slug || '') && String(slug || '').length >= 2;
+  }
+
+  function _colRefreshPreview(iframeId, html, css) {
+    var frame = $(iframeId);
+    if (!frame) return;
+    frame.srcdoc = '';
+    setTimeout(function () {
+      frame.srcdoc = global.buildSrcDoc ? global.buildSrcDoc(html, css) : '<style>' + (css || '') + '</style>' + (html || '');
+    }, 50);
+  }
+
+  function _colPopulateGroupSelect(selectEl, selectedSlug) {
+    var groups = ColGroups.getAll();
+    var html = '<option value="">Selecione um grupo</option>';
+    var i;
+    if (!selectEl) return;
+    for (i = 0; i < groups.length; i += 1) {
+      html += '<option value="' + escapeHtml(groups[i].slug) + '"' + (groups[i].slug === selectedSlug ? ' selected' : '') + '>' + escapeHtml(groups[i].name) + '</option>';
     }
-  });
-});
+    selectEl.innerHTML = html;
+  }
+
+  function _colShowFieldError(id, show) {
+    var el = $(id);
+    if (el) el.classList.toggle('show', !!show);
+  }
+
+  function _getGroup(slug) {
+    return ColGroups.getBySlug(slug) || { slug: slug || '', name: slug || 'Sem grupo', cor: '#e36a00' };
+  }
+
+  function _parseTags(value) {
+    return global.parseTags ? global.parseTags(value) : String(value || '').split(',');
+  }
+
+  function _layoutContent(layout) {
+    if (!layout) return '';
+    return (layout.css ? layout.css + '\n' : '') + (layout.html || '');
+  }
+
+  function _switchMode(rootId, mode) {
+    var root = $(rootId);
+    var buttons;
+    var panels;
+    var i;
+    if (!root) return;
+    buttons = root.querySelectorAll('[data-col-mode]');
+    panels = root.querySelectorAll('[data-col-panel]');
+    for (i = 0; i < buttons.length; i += 1) {
+      buttons[i].classList.toggle('active', buttons[i].getAttribute('data-col-mode') === mode);
+    }
+    for (i = 0; i < panels.length; i += 1) {
+      panels[i].classList.toggle('active', panels[i].getAttribute('data-col-panel') === mode);
+    }
+  }
+
+  function _buildCollectionModal() {
+    var overlay;
+    if ($('colCollectionOverlay')) return;
+    overlay = _colMakeOverlay('colCollectionOverlay');
+    overlay.innerHTML =
+      '<div class="modal col-modal" id="colCollectionModal" role="dialog" aria-modal="true">' +
+        '<div class="col-modal-header">' +
+          '<div class="col-modal-header-left">' +
+            '<div class="col-modal-category">Coleção</div>' +
+            '<h2 class="col-modal-title" id="colCollectionTitle"></h2>' +
+          '</div>' +
+          '<div class="col-modal-header-right">' +
+            '<span class="col-modal-group-badge" id="colCollectionGroupBadge"></span>' +
+            '<button class="btn btn-ghost" id="colCollectionEditBtn" type="button">Editar</button>' +
+            '<button class="modal-close" id="colCollectionCloseBtn" type="button" aria-label="Fechar">×</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="col-modal-layouts-wrap"><div class="col-modal-layouts-grid" id="colCollectionLayoutsGrid"></div></div>' +
+      '</div>';
+    $('colCollectionCloseBtn').addEventListener('click', colCloseCollectionModal);
+    $('colCollectionEditBtn').addEventListener('click', function () {
+      if (_colCurrentCollection) colOpenEditModal(_colCurrentCollection);
+    });
+    _colOverlayClick('colCollectionOverlay', 'colCollectionModal', colCloseCollectionModal);
+  }
+
+  function _colRenderLayoutsGrid() {
+    var grid = $('colCollectionLayoutsGrid');
+    var layouts = _colCurrentCollection && _colCurrentCollection.layouts ? _colCurrentCollection.layouts : [];
+    var i;
+    var block;
+    var add;
+    if (!grid) return;
+    grid.innerHTML = '';
+    for (i = 0; i < layouts.length; i += 1) {
+      block = _createCollectionLayoutBlock(layouts[i]);
+      grid.appendChild(block);
+    }
+    add = document.createElement('article');
+    add.className = 'col-layout-add-card';
+    add.innerHTML = '<button type="button" id="colOpenAddLayoutBtn"><span class="col-layout-add-icon">+</span><span>Adicionar Layout</span></button>';
+    add.querySelector('button').addEventListener('click', colOpenAddLayoutModal);
+    grid.appendChild(add);
+    if (global.ghcolInjectButtons) global.ghcolInjectButtons();
+  }
+
+  function _createCollectionLayoutBlock(layout) {
+    var block = document.createElement('article');
+    var iframe;
+    block.className = 'col-layout-block';
+    block.innerHTML =
+      '<div class="col-layout-preview">' +
+        '<iframe title="Preview de ' + escapeHtml(layout.name) + '"></iframe>' +
+        '<div class="col-layout-preview-overlay" aria-hidden="true"></div>' +
+      '</div>' +
+      '<div class="col-layout-body"><h3 class="col-layout-name">' + escapeHtml(layout.name) + '</h3></div>' +
+      '<div class="col-layout-footer">' +
+        '<button class="btn btn-ghost col-copy-layout-btn" type="button">Copiar tudo</button>' +
+        '<button class="btn btn-ghost col-edit-layout-btn" type="button">Editar</button>' +
+        '<span class="col-layout-delete-anchor" data-col-slug="' + escapeHtml(_colCurrentCollection.slug) + '" data-layout-id="' + escapeHtml(layout.id) + '"></span>' +
+      '</div>';
+    iframe = block.querySelector('iframe');
+    if (global.lazyIframe) global.lazyIframe(iframe, layout.html, layout.css);
+    block.querySelector('.col-copy-layout-btn').addEventListener('click', function () {
+      global.copyToClipboard(_layoutContent(layout), this, '✓ Layout copiado!');
+    });
+    block.querySelector('.col-edit-layout-btn').addEventListener('click', function () {
+      colOpenEditLayoutModal(layout);
+    });
+    return block;
+  }
+
+  function colOpenCollectionModal(col) {
+    var group;
+    _buildCollectionModal();
+    _colCurrentCollection = col;
+    group = _getGroup(col.group);
+    $('colCollectionModal').style.setProperty('--col-color', group.cor);
+    $('colCollectionTitle').textContent = col.name;
+    $('colCollectionGroupBadge').textContent = group.name;
+    _colRenderLayoutsGrid();
+    _colShowOverlay('colCollectionOverlay');
+  }
+
+  function colCloseCollectionModal() {
+    _colHideOverlay('colCollectionOverlay');
+  }
+
+  function _buildCreateModal() {
+    var overlay;
+    if ($('colCreateOverlay')) return;
+    overlay = _colMakeOverlay('colCreateOverlay');
+    overlay.innerHTML =
+      '<div class="modal col-form-modal" id="colCreateModal" role="dialog" aria-modal="true">' +
+        '<div class="col-form-header"><div><div class="col-modal-category">Coleção</div><h2 class="col-modal-title">Criar Coleção</h2></div><button class="modal-close" id="colCreateCloseBtn" type="button">×</button></div>' +
+        '<div class="col-form-body">' +
+          '<label class="col-field">Nome <input id="colCreateName" type="text"><span class="col-field-error" id="colCreateNameError">Informe ao menos 3 caracteres.</span></label>' +
+          '<label class="col-field">Slug <input id="colCreateSlug" type="text"><span class="col-field-hint" id="colCreateSlugHint">colecoes/data/[slug].js</span><span class="col-field-error" id="colCreateSlugError">Use letras minúsculas, números e hífen.</span></label>' +
+          '<div class="col-field-row"><label class="col-field">Grupo <select class="col-group-select" id="colCreateGroup"></select><span class="col-field-error" id="colCreateGroupError">Escolha um grupo.</span></label><button class="col-group-new-btn" id="colCreateNewGroupBtn" type="button">+ Novo grupo</button></div>' +
+          '<label class="col-field">Tags <input id="colCreateTags" type="text" placeholder="hero, responsivo"></label>' +
+        '</div>' +
+        '<div class="col-form-footer"><button class="col-btn-cancel" id="colCreateCancelBtn" type="button">Cancelar</button><span id="colCreateGhAnchor"></span></div>' +
+      '</div>';
+    $('colCreateCloseBtn').addEventListener('click', colCloseCreateModal);
+    $('colCreateCancelBtn').addEventListener('click', colCloseCreateModal);
+    $('colCreateName').addEventListener('input', function () {
+      $('colCreateSlug').value = _colSlugify(this.value);
+      $('colCreateSlugHint').textContent = 'colecoes/data/' + ($('colCreateSlug').value || '[slug]') + '.js';
+    });
+    $('colCreateSlug').addEventListener('input', function () {
+      $('colCreateSlugHint').textContent = 'colecoes/data/' + (this.value || '[slug]') + '.js';
+    });
+    $('colCreateNewGroupBtn').addEventListener('click', function () {
+      colOpenNewGroupModal(function (group) {
+        _colPopulateGroupSelect($('colCreateGroup'), group.slug);
+      });
+    });
+    _colOverlayClick('colCreateOverlay', 'colCreateModal', colCloseCreateModal);
+  }
+
+  function colOpenCreateModal() {
+    _buildCreateModal();
+    $('colCreateName').value = '';
+    $('colCreateSlug').value = '';
+    $('colCreateTags').value = '';
+    $('colCreateSlugHint').textContent = 'colecoes/data/[slug].js';
+    _colPopulateGroupSelect($('colCreateGroup'), '');
+    _colShowFieldError('colCreateNameError', false);
+    _colShowFieldError('colCreateSlugError', false);
+    _colShowFieldError('colCreateGroupError', false);
+    _colShowOverlay('colCreateOverlay');
+    if (global.ghcolInjectButtons) global.ghcolInjectButtons();
+  }
+
+  function colCloseCreateModal() {
+    _colHideOverlay('colCreateOverlay');
+  }
+
+  function colGetCreateFormData() {
+    var data = {
+      name: $('colCreateName') ? $('colCreateName').value.trim() : '',
+      slug: $('colCreateSlug') ? $('colCreateSlug').value.trim() : '',
+      group: $('colCreateGroup') ? $('colCreateGroup').value : '',
+      tags: _parseTags($('colCreateTags') ? $('colCreateTags').value : '')
+    };
+    _colShowFieldError('colCreateNameError', data.name.length < 3);
+    _colShowFieldError('colCreateSlugError', !_colValidSlug(data.slug));
+    _colShowFieldError('colCreateGroupError', !data.group);
+    if (data.name.length < 3 || !_colValidSlug(data.slug) || !data.group) return null;
+    return data;
+  }
+
+  function _buildEditModal() {
+    var overlay;
+    if ($('colEditOverlay')) return;
+    overlay = _colMakeOverlay('colEditOverlay');
+    overlay.innerHTML =
+      '<div class="modal col-form-modal" id="colEditModal" role="dialog" aria-modal="true">' +
+        '<div class="col-form-header"><div><div class="col-modal-category">Coleção</div><h2 class="col-modal-title">Editar Coleção</h2></div><button class="modal-close" id="colEditCloseBtn" type="button">×</button></div>' +
+        '<div class="col-form-body">' +
+          '<input id="colEditSlug" type="hidden">' +
+          '<label class="col-field">Nome <input id="colEditName" type="text"><span class="col-field-error" id="colEditNameError">Informe ao menos 3 caracteres.</span></label>' +
+          '<div class="col-field-row"><label class="col-field">Grupo <select class="col-group-select" id="colEditGroup"></select><span class="col-field-error" id="colEditGroupError">Escolha um grupo.</span></label><button class="col-group-new-btn" id="colEditNewGroupBtn" type="button">+ Novo grupo</button></div>' +
+          '<label class="col-field">Tags <input id="colEditTags" type="text"></label>' +
+        '</div>' +
+        '<div class="col-form-footer"><button class="col-btn-cancel" id="colEditCancelBtn" type="button">Cancelar</button><span id="colEditGhAnchor"></span></div>' +
+      '</div>';
+    $('colEditCloseBtn').addEventListener('click', colCloseEditModal);
+    $('colEditCancelBtn').addEventListener('click', colCloseEditModal);
+    $('colEditNewGroupBtn').addEventListener('click', function () {
+      colOpenNewGroupModal(function (group) {
+        _colPopulateGroupSelect($('colEditGroup'), group.slug);
+      });
+    });
+    _colOverlayClick('colEditOverlay', 'colEditModal', colCloseEditModal);
+  }
+
+  function colOpenEditModal(col) {
+    _buildEditModal();
+    _colCurrentCollection = col;
+    $('colEditSlug').value = col.slug;
+    $('colEditName').value = col.name || '';
+    $('colEditTags').value = (col.tags || []).join(', ');
+    _colPopulateGroupSelect($('colEditGroup'), col.group);
+    _colShowFieldError('colEditNameError', false);
+    _colShowFieldError('colEditGroupError', false);
+    _colShowOverlay('colEditOverlay');
+    if (global.ghcolInjectButtons) global.ghcolInjectButtons();
+  }
+
+  function colCloseEditModal() {
+    _colHideOverlay('colEditOverlay');
+  }
+
+  function colGetEditFormData() {
+    var data = {
+      slug: $('colEditSlug') ? $('colEditSlug').value : '',
+      name: $('colEditName') ? $('colEditName').value.trim() : '',
+      group: $('colEditGroup') ? $('colEditGroup').value : '',
+      tags: _parseTags($('colEditTags') ? $('colEditTags').value : '')
+    };
+    _colShowFieldError('colEditNameError', data.name.length < 3);
+    _colShowFieldError('colEditGroupError', !data.group);
+    if (data.name.length < 3 || !data.group) return null;
+    return data;
+  }
+
+  function _buildNewGroupModal() {
+    var overlay;
+    var i;
+    var swatches = '';
+    if ($('colNewGroupOverlay')) return;
+    for (i = 0; i < _colors.length; i += 1) {
+      swatches += '<button class="col-color-swatch' + (i === 0 ? ' active' : '') + '" type="button" data-color="' + _colors[i] + '" style="--swatch:' + _colors[i] + '"></button>';
+    }
+    overlay = _colMakeOverlay('colNewGroupOverlay');
+    overlay.innerHTML =
+      '<div class="modal col-newgroup-modal" id="colNewGroupModal" role="dialog" aria-modal="true">' +
+        '<div class="col-form-header"><div><div class="col-modal-category">Grupo</div><h2 class="col-modal-title">Novo Grupo</h2></div><button class="modal-close" id="colNewGroupCloseBtn" type="button">×</button></div>' +
+        '<div class="col-form-body">' +
+          '<label class="col-field">Nome <input id="colNewGroupName" type="text"><span class="col-field-error" id="colNewGroupNameError">Informe um nome válido.</span></label>' +
+          '<div class="col-field">Cor <div class="col-color-palette" id="colColorPalette">' + swatches + '</div></div>' +
+          '<label class="col-field">Hex customizado <div class="col-color-custom-wrap"><span class="col-color-preview" id="colColorPreview"></span><input class="col-color-hex-input" id="colNewGroupColor" type="text" value="' + _colors[0] + '"></div></label>' +
+        '</div>' +
+        '<div class="col-form-footer"><button class="col-btn-cancel" id="colNewGroupCancelBtn" type="button">Cancelar</button><button class="col-btn-primary" id="colNewGroupSaveBtn" type="button">Criar grupo</button></div>' +
+      '</div>';
+    $('colNewGroupCloseBtn').addEventListener('click', colCloseNewGroupModal);
+    $('colNewGroupCancelBtn').addEventListener('click', colCloseNewGroupModal);
+    $('colNewGroupSaveBtn').addEventListener('click', _colCreateGroupFromModal);
+    $('colNewGroupColor').addEventListener('input', function () {
+      $('colColorPreview').style.background = this.value;
+    });
+    $('colColorPalette').addEventListener('click', function (event) {
+      var btn = event.target.closest('[data-color]');
+      var all;
+      var i;
+      if (!btn) return;
+      all = $('colColorPalette').querySelectorAll('[data-color]');
+      for (i = 0; i < all.length; i += 1) all[i].classList.remove('active');
+      btn.classList.add('active');
+      $('colNewGroupColor').value = btn.getAttribute('data-color');
+      $('colColorPreview').style.background = btn.getAttribute('data-color');
+    });
+    _colOverlayClick('colNewGroupOverlay', 'colNewGroupModal', colCloseNewGroupModal);
+  }
+
+  function colOpenNewGroupModal(callback) {
+    _buildNewGroupModal();
+    _colNewGroupCallback = callback || null;
+    $('colNewGroupName').value = '';
+    $('colNewGroupColor').value = _colors[0];
+    $('colColorPreview').style.background = _colors[0];
+    _colShowFieldError('colNewGroupNameError', false);
+    _colShowOverlay('colNewGroupOverlay');
+  }
+
+  function colCloseNewGroupModal() {
+    _colHideOverlay('colNewGroupOverlay');
+  }
+
+  function _colCreateGroupFromModal() {
+    var name = $('colNewGroupName').value.trim();
+    var slug = _colSlugify(name);
+    var color = $('colNewGroupColor').value.trim() || _colors[0];
+    var group;
+    _colShowFieldError('colNewGroupNameError', !_colValidSlug(slug));
+    if (!_colValidSlug(slug)) return;
+    group = { slug: slug, name: name, cor: color };
+    ColGroups.addPending(group);
+    if (_colNewGroupCallback) _colNewGroupCallback(group);
+    colCloseNewGroupModal();
+  }
+
+  function _buildAddLayoutModal() {
+    var overlay;
+    if ($('colAddLayoutOverlay')) return;
+    overlay = _colMakeOverlay('colAddLayoutOverlay');
+    overlay.innerHTML =
+      '<div class="modal col-layout-form-modal" id="colAddLayoutModal" role="dialog" aria-modal="true">' +
+        '<div class="col-form-header"><div><div class="col-modal-category">Layout</div><h2 class="col-modal-title">Adicionar Layout</h2></div><button class="modal-close" id="colAddLayoutCloseBtn" type="button">×</button></div>' +
+        '<div class="col-form-body">' +
+          '<div class="col-field-row"><label class="col-field">ID <input id="colAddLayoutId" type="text"><span class="col-field-error" id="colAddLayoutIdError">Use letras minúsculas, números e hífen.</span></label><label class="col-field">Nome <input id="colAddLayoutName" type="text"><span class="col-field-error" id="colAddLayoutNameError">Informe um nome.</span></label></div>' +
+          '<div class="col-edit-mode-bar"><button class="col-edit-mode-btn active" type="button" data-col-mode="content">Conteúdo</button><button class="col-edit-mode-btn" type="button" data-col-mode="preview">Preview</button></div>' +
+          '<div class="col-edit-main" id="colAddLayoutMain">' +
+            '<section class="col-edit-panel active" data-col-panel="content"><textarea class="col-edit-textarea" id="colAddLayoutContent" spellcheck="false"></textarea></section>' +
+            '<section class="col-edit-panel" data-col-panel="preview"><iframe class="col-edit-iframe" id="colAddLayoutPreview" title="Preview"></iframe></section>' +
+          '</div>' +
+        '</div>' +
+        '<div class="col-form-footer"><button class="col-btn-cancel" id="colAddLayoutCancelBtn" type="button">Cancelar</button><span id="colAddLayoutGhAnchor"></span></div>' +
+      '</div>';
+    $('colAddLayoutCloseBtn').addEventListener('click', colCloseAddLayoutModal);
+    $('colAddLayoutCancelBtn').addEventListener('click', colCloseAddLayoutModal);
+    _bindLayoutMode('colAddLayoutModal', 'colAddLayoutPreview', 'colAddLayoutContent');
+    _colOverlayClick('colAddLayoutOverlay', 'colAddLayoutModal', colCloseAddLayoutModal);
+  }
+
+  function _bindLayoutMode(modalId, iframeId, textareaId) {
+    var modal = $(modalId);
+    var buttons = modal.querySelectorAll('[data-col-mode]');
+    var i;
+    for (i = 0; i < buttons.length; i += 1) {
+      buttons[i].addEventListener('click', function () {
+        var mode = this.getAttribute('data-col-mode');
+        _switchMode(modalId, mode);
+        if (mode === 'preview' || mode === 'visualizar') {
+          _colRefreshPreview(iframeId, $(textareaId).value, '');
+        }
+      });
+    }
+  }
+
+  function colOpenAddLayoutModal() {
+    _buildAddLayoutModal();
+    _colCurrentLayout = null;
+    $('colAddLayoutId').value = '';
+    $('colAddLayoutName').value = '';
+    $('colAddLayoutContent').value = '';
+    _colShowFieldError('colAddLayoutIdError', false);
+    _colShowFieldError('colAddLayoutNameError', false);
+    _switchMode('colAddLayoutModal', 'content');
+    _colShowOverlay('colAddLayoutOverlay');
+    if (global.ghcolInjectButtons) global.ghcolInjectButtons();
+  }
+
+  function colCloseAddLayoutModal() {
+    _colHideOverlay('colAddLayoutOverlay');
+  }
+
+  function colGetAddLayoutFormData() {
+    var data = {
+      id: $('colAddLayoutId') ? $('colAddLayoutId').value.trim() : '',
+      name: $('colAddLayoutName') ? $('colAddLayoutName').value.trim() : '',
+      html: $('colAddLayoutContent') ? $('colAddLayoutContent').value : '',
+      css: ''
+    };
+    _colShowFieldError('colAddLayoutIdError', !_colValidSlug(data.id));
+    _colShowFieldError('colAddLayoutNameError', !data.name);
+    if (!_colValidSlug(data.id) || !data.name) return null;
+    return data;
+  }
+
+  function _buildEditLayoutModal() {
+    var overlay;
+    if ($('colEditLayoutOverlay')) return;
+    overlay = _colMakeOverlay('colEditLayoutOverlay');
+    overlay.innerHTML =
+      '<div class="modal col-layout-form-modal" id="colEditLayoutModal" role="dialog" aria-modal="true">' +
+        '<div class="col-form-header"><div><div class="col-modal-category">Layout</div><h2 class="col-modal-title">Editar Layout</h2></div><button class="modal-close" id="colEditLayoutCloseBtn" type="button">×</button></div>' +
+        '<div class="col-form-body">' +
+          '<input id="colEditLayoutId" type="hidden">' +
+          '<label class="col-field">Nome <input id="colEditLayoutName" type="text"><span class="col-field-error" id="colEditLayoutNameError">Informe um nome.</span></label>' +
+          '<div class="col-edit-mode-bar"><button class="col-edit-mode-btn" type="button" data-col-mode="content">Conteúdo</button><button class="col-edit-mode-btn active" type="button" data-col-mode="visualizar">Visualizar</button></div>' +
+          '<div class="col-edit-main" id="colEditLayoutMain">' +
+            '<section class="col-edit-panel" data-col-panel="content"><textarea class="col-edit-textarea" id="colEditLayoutContent" spellcheck="false"></textarea></section>' +
+            '<section class="col-edit-panel active" data-col-panel="visualizar"><iframe class="col-edit-iframe" id="colEditLayoutPreview" title="Preview"></iframe></section>' +
+          '</div>' +
+        '</div>' +
+        '<div class="col-form-footer"><button class="col-btn-cancel" id="colEditLayoutCancelBtn" type="button">Cancelar</button><span id="colEditLayoutGhAnchor"></span></div>' +
+      '</div>';
+    $('colEditLayoutCloseBtn').addEventListener('click', colCloseEditLayoutModal);
+    $('colEditLayoutCancelBtn').addEventListener('click', colCloseEditLayoutModal);
+    _bindLayoutMode('colEditLayoutModal', 'colEditLayoutPreview', 'colEditLayoutContent');
+    _colOverlayClick('colEditLayoutOverlay', 'colEditLayoutModal', colCloseEditLayoutModal);
+  }
+
+  function colOpenEditLayoutModal(layout) {
+    _buildEditLayoutModal();
+    _colCurrentLayout = layout;
+    $('colEditLayoutId').value = layout.id || '';
+    $('colEditLayoutName').value = layout.name || '';
+    $('colEditLayoutContent').value = _layoutContent(layout);
+    _colShowFieldError('colEditLayoutNameError', false);
+    _switchMode('colEditLayoutModal', 'visualizar');
+    _colShowOverlay('colEditLayoutOverlay');
+    _colRefreshPreview('colEditLayoutPreview', $('colEditLayoutContent').value, '');
+    if (global.ghcolInjectButtons) global.ghcolInjectButtons();
+  }
+
+  function colCloseEditLayoutModal() {
+    _colHideOverlay('colEditLayoutOverlay');
+    _colCurrentLayout = null;
+  }
+
+  function colGetEditLayoutFormData() {
+    var data = {
+      id: $('colEditLayoutId') ? $('colEditLayoutId').value : '',
+      name: $('colEditLayoutName') ? $('colEditLayoutName').value.trim() : '',
+      html: $('colEditLayoutContent') ? $('colEditLayoutContent').value : '',
+      css: ''
+    };
+    _colShowFieldError('colEditLayoutNameError', !data.name);
+    if (!data.name) return null;
+    return data;
+  }
+
+  function _buildConfirmModal() {
+    var overlay;
+    if ($('colConfirmOverlay')) return;
+    overlay = _colMakeOverlay('colConfirmOverlay');
+    overlay.innerHTML =
+      '<div class="modal col-confirm-modal" id="colConfirmModal" role="dialog" aria-modal="true">' +
+        '<div class="col-form-header"><h2 class="col-confirm-title" id="colConfirmTitle"></h2><button class="modal-close" id="colConfirmCloseBtn" type="button">×</button></div>' +
+        '<p class="col-confirm-body" id="colConfirmBody"></p>' +
+        '<div class="col-confirm-actions"><button class="col-btn-cancel" id="colConfirmCancelBtn" type="button">Cancelar</button><button class="col-btn-primary" id="colConfirmOkBtn" type="button">OK</button></div>' +
+      '</div>';
+    $('colConfirmCloseBtn').addEventListener('click', colCloseConfirm);
+    $('colConfirmCancelBtn').addEventListener('click', colCloseConfirm);
+    $('colConfirmOkBtn').addEventListener('click', function () {
+      var cb = _colConfirmCallback;
+      colCloseConfirm();
+      if (cb) cb();
+    });
+    _colOverlayClick('colConfirmOverlay', 'colConfirmModal', colCloseConfirm);
+  }
+
+  function colOpenConfirm(options) {
+    var ok;
+    _buildConfirmModal();
+    options = options || {};
+    _colConfirmCallback = options.onConfirm || null;
+    $('colConfirmTitle').textContent = options.title || 'Confirmar ação';
+    $('colConfirmBody').textContent = options.body || '';
+    ok = $('colConfirmOkBtn');
+    ok.textContent = options.labelOk || 'OK';
+    ok.className = options.danger ? 'col-btn-delete' : 'col-btn-primary';
+    _colShowOverlay('colConfirmOverlay');
+  }
+
+  function colCloseConfirm() {
+    _colHideOverlay('colConfirmOverlay');
+  }
+
+  function bindEscape() {
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      if ($('colConfirmOverlay') && !$('colConfirmOverlay').classList.contains('hidden')) return colCloseConfirm();
+      if ($('colEditLayoutOverlay') && !$('colEditLayoutOverlay').classList.contains('hidden')) return colCloseEditLayoutModal();
+      if ($('colAddLayoutOverlay') && !$('colAddLayoutOverlay').classList.contains('hidden')) return colCloseAddLayoutModal();
+      if ($('colNewGroupOverlay') && !$('colNewGroupOverlay').classList.contains('hidden')) return colCloseNewGroupModal();
+      if ($('colEditOverlay') && !$('colEditOverlay').classList.contains('hidden')) return colCloseEditModal();
+      if ($('colCreateOverlay') && !$('colCreateOverlay').classList.contains('hidden')) return colCloseCreateModal();
+      if ($('colCollectionOverlay') && !$('colCollectionOverlay').classList.contains('hidden')) return colCloseCollectionModal();
+    });
+  }
+
+  function init() {
+    bindEscape();
+  }
+
+  global.colOpenCollectionModal = colOpenCollectionModal;
+  global.colCloseCollectionModal = colCloseCollectionModal;
+  global.colOpenCreateModal = colOpenCreateModal;
+  global.colCloseCreateModal = colCloseCreateModal;
+  global.colOpenEditModal = colOpenEditModal;
+  global.colCloseEditModal = colCloseEditModal;
+  global.colOpenNewGroupModal = colOpenNewGroupModal;
+  global.colOpenAddLayoutModal = colOpenAddLayoutModal;
+  global.colCloseAddLayoutModal = colCloseAddLayoutModal;
+  global.colOpenEditLayoutModal = colOpenEditLayoutModal;
+  global.colCloseEditLayoutModal = colCloseEditLayoutModal;
+  global.colOpenConfirm = colOpenConfirm;
+  global.colCloseAllModals = colCloseAllModals;
+  global.colGetCreateFormData = colGetCreateFormData;
+  global.colGetEditFormData = colGetEditFormData;
+  global.colGetAddLayoutFormData = colGetAddLayoutFormData;
+  global.colGetEditLayoutFormData = colGetEditLayoutFormData;
+  global.colGetCurrentCollection = function () { return _colCurrentCollection; };
+  global.colGetCurrentLayout = function () { return _colCurrentLayout; };
+  global.colRenderCurrentLayouts = _colRenderLayoutsGrid;
+
+  document.addEventListener('DOMContentLoaded', init);
+}(window));

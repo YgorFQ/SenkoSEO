@@ -1,377 +1,465 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   senko-github-v2.js — Integração GitHub para salvar layouts e variantes
+/*
+ * Senko GitHub v2
+ * Responsabilidade: configuracao, token, API de contents e salvar layouts.
+ * Dependencias: core/script.js.
+ * Expoe: githubGetFile/githubPutFile/githubDeleteFile e helpers gh*.
+ */
+(function (global) {
+  var _ghSaving = false;
+  var _layoutFiles = ['layouts/layouts001.js'];
+  var _pollTimer = null;
 
-   RESPONSABILIDADE:
-     Detecta owner/repo pelo hostname do GitHub Pages, gerencia token
-     via localStorage, expõe funções de leitura/escrita na API REST v3.
-     Injeta botão de cadeado e engrenagem no header. Injeta botão
-     "GitHub" nas âncoras dos modais de editar/adicionar layout.
-     Implementa deploy status polling com ponto pulsante.
-
-   EXPÕE (globais):
-     ghGetToken()               → string
-     ghSetToken(token)          → void
-     ghEncodeBase64(str)        → string
-     ghDecodeBase64(b64)        → string
-     githubGetFile(path)        → Promise<{content, sha}>
-     githubPutFile(path, content, sha, msg) → Promise
-     ghEnsureToken()            → boolean
-     ghReadDeployStatus()       → void  (inicia polling)
-
-   DEPENDÊNCIAS:
-     utils.js (showToast)
-
-   ORDEM DE CARREGAMENTO:
-     Após script.js
-═══════════════════════════════════════════════════════════════════════ */
-
-/* ── Configuração automática ────────────────────────────────────────── */
-
-var _ghOwner = '';
-var _ghRepo  = '';
-var _ghSaving = false; // Race condition lock
-
-// Detecta owner/repo pelo hostname do GitHub Pages
-(function () {
-  var host = window.location.hostname;
-  if (host.endsWith('.github.io')) {
-    _ghOwner = host.replace('.github.io', '');
-    var parts = window.location.pathname.split('/').filter(Boolean);
-    _ghRepo  = parts[0] || '';
-  }
-  // Fallback: lê do localStorage (útil em localhost)
-  if (!_ghOwner || !_ghRepo) {
-    try {
-      var cfg = JSON.parse(localStorage.getItem('senkolib_github_config') || '{}');
-      _ghOwner = cfg.owner || _ghOwner;
-      _ghRepo  = cfg.repo  || _ghRepo;
-    } catch (e) {}
-  }
-}());
-
-/* ── Token ──────────────────────────────────────────────────────────── */
-
-function ghGetToken() {
-  return localStorage.getItem('senkolib_github_token') || '';
-}
-
-function ghSetToken(token) {
-  localStorage.setItem('senkolib_github_token', token.trim());
-  _ghUpdateLockBtn();
-}
-
-function ghEnsureToken() {
-  if (ghGetToken()) return true;
-  _ghOpenConfigModal();
-  return false;
-}
-
-/* ── Encoding UTF-8 seguro para Base64 ──────────────────────────────── */
-
-function ghEncodeBase64(str) {
-  return btoa(unescape(encodeURIComponent(str)));
-}
-
-function ghDecodeBase64(b64) {
-  try { return decodeURIComponent(escape(atob(b64))); }
-  catch (e) { return atob(b64); }
-}
-
-/* ── API base ───────────────────────────────────────────────────────── */
-
-// GET de um arquivo no repositório — retorna { content (base64), sha }
-function githubGetFile(path) {
-  var url = 'https://api.github.com/repos/' + _ghOwner + '/' + _ghRepo + '/contents/' + path;
-  return fetch(url, {
-    headers: {
-      'Authorization': 'token ' + ghGetToken(),
-      'Accept': 'application/vnd.github.v3+json',
-    },
-  }).then(function (res) {
-    if (!res.ok) throw new Error('GET falhou: ' + res.status);
-    return res.json();
-  });
-}
-
-// PUT (criar ou atualizar) um arquivo — sha é obrigatório para update
-function githubPutFile(path, content, sha, message) {
-  var url  = 'https://api.github.com/repos/' + _ghOwner + '/' + _ghRepo + '/contents/' + path;
-  var body = { message: message || 'SenkoLib: update ' + path, content: ghEncodeBase64(content) };
-  if (sha) body.sha = sha;
-  return fetch(url, {
-    method: 'PUT',
-    headers: {
-      'Authorization': 'token ' + ghGetToken(),
-      'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  }).then(function (res) {
-    if (!res.ok) return res.json().then(function (d) { throw new Error(d.message || 'PUT falhou'); });
-    return res.json();
-  });
-}
-
-/* ── Parser @@@@Senko ───────────────────────────────────────────────── */
-
-// Encontra e substitui o bloco de um layout no arquivo JS
-// Respeita template literals (backticks) para não confundir delimitadores
-function ghParseAndReplace(fileContent, id, newBlock) {
-  var marker = '/*@@@@Senko - ' + id + ' */';
-  var start  = fileContent.indexOf(marker);
-  if (start === -1) {
-    // Não encontrado: appenda antes do ]);  final
-    var insertBefore = fileContent.lastIndexOf(']);');
-    if (insertBefore === -1) return fileContent + '\n' + marker + '\n' + newBlock + ',\n';
-    return fileContent.slice(0, insertBefore) + '\n' + marker + '\n' + newBlock + ',\n\n' + fileContent.slice(insertBefore);
+  function $(id) {
+    return document.getElementById(id);
   }
 
-  // Localiza o objeto {…} após o marcador, respeitando template literals
-  var objStart = fileContent.indexOf('{', start + marker.length);
-  if (objStart === -1) return fileContent;
+  function ghEncodeBase64(str) {
+    return btoa(unescape(encodeURIComponent(str)));
+  }
 
-  var depth   = 0;
-  var inBt    = false; // dentro de backtick
-  var i       = objStart;
+  function ghDecodeBase64(b64) {
+    return decodeURIComponent(escape(atob(String(b64 || '').replace(/\n/g, ''))));
+  }
 
-  while (i < fileContent.length) {
-    var ch = fileContent[i];
-    if (ch === '`' && !inBt)        { inBt = true;  i++; continue; }
-    if (ch === '`' &&  inBt)        { inBt = false; i++; continue; }
-    if (ch === '\\' && inBt)        { i += 2; continue; } // escape dentro de BT
-    if (!inBt) {
-      if (ch === '{') depth++;
-      if (ch === '}') { depth--; if (depth === 0) break; }
+  function ghGetToken() {
+    return localStorage.getItem('senkolib_github_token') || '';
+  }
+
+  function ghSetToken(token) {
+    if (token) localStorage.setItem('senkolib_github_token', token);
+    else localStorage.removeItem('senkolib_github_token');
+    ghUpdateLockButton();
+  }
+
+  function ghDetectConfig() {
+    var host = location.hostname;
+    var path = location.pathname.replace(/^\/+/, '').split('/')[0];
+    if (/\.github\.io$/i.test(host) && path) {
+      return { owner: host.split('.')[0], repo: path, branch: 'main' };
     }
-    i++;
+    return null;
   }
 
-  var objEnd = i + 1; // inclui o '}'
-  return fileContent.slice(0, start) + marker + '\n' + newBlock + fileContent.slice(objEnd);
-}
+  function ghGetConfig() {
+    var detected = ghDetectConfig();
+    var saved;
+    if (detected) return detected;
+    try {
+      saved = JSON.parse(localStorage.getItem('senkolib_github_config') || '{}');
+    } catch (err) {
+      saved = {};
+    }
+    return {
+      owner: saved.owner || '',
+      repo: saved.repo || '',
+      branch: saved.branch || 'main'
+    };
+  }
 
-/* ── Salvar layout ──────────────────────────────────────────────────── */
+  function ghSetConfig(config) {
+    localStorage.setItem('senkolib_github_config', JSON.stringify({
+      owner: config.owner || '',
+      repo: config.repo || '',
+      branch: config.branch || 'main'
+    }));
+  }
 
-// Lê o arquivo de layouts, substitui/adiciona o bloco e commita
-function ghSaveLayout(layout, onSuccess) {
-  if (_ghSaving) { alert('Aguarde, salvamento em andamento…'); return; }
-  if (!ghEnsureToken()) return;
-  _ghSaving = true;
+  function ghEnsureToken() {
+    var token = ghGetToken();
+    if (!token) {
+      ghOpenConfigModal();
+      global.showToast('Configure o token GitHub.');
+      return null;
+    }
+    return token;
+  }
 
-  var filePath = 'layouts/layouts001.js';
+  function ghEnsureConfig() {
+    var config = ghGetConfig();
+    if (!config.owner || !config.repo) {
+      ghOpenConfigModal();
+      global.showToast('Configure owner e repo.');
+      return null;
+    }
+    return config;
+  }
 
-  githubGetFile(filePath)
-    .then(function (data) {
-      var currentContent = ghDecodeBase64(data.content.replace(/\n/g, ''));
-      var sha = data.sha;
+  function ghApiUrl(path) {
+    var config = ghGetConfig();
+    return 'https://api.github.com/repos/' + encodeURIComponent(config.owner) + '/' + encodeURIComponent(config.repo) + '/contents/' + path.replace(/^\/+/, '');
+  }
 
-      var newBlock =
-        '{\n' +
-        '  id:   \'' + layout.id + '\',\n' +
-        '  name: \'' + layout.name.replace(/'/g, "\\'") + '\',\n' +
-        '  tags: ' + JSON.stringify(layout.tags || []) + ',\n' +
-        '  html: `' + (layout.html || '') + '`,\n' +
-        '  css:  `' + (layout.css  || '') + '`,\n' +
-        '}';
+  function ghHeaders() {
+    var token = ghGetToken();
+    var headers = {
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+    if (token) headers.Authorization = 'Bearer ' + token;
+    return headers;
+  }
 
-      var newContent = ghParseAndReplace(currentContent, layout.id, newBlock);
-      return githubPutFile(filePath, newContent, sha, 'SenkoLib: save ' + layout.id);
-    })
-    .then(function () {
-      _ghSaving = false;
-      showToast();
-      if (typeof onSuccess === 'function') onSuccess();
-      _ghWriteDeployStatus(true);
-      setTimeout(function () { _ghWriteDeployStatus(false); }, 3000);
-    })
-    .catch(function (err) {
-      _ghSaving = false;
-      alert('Erro ao salvar: ' + err.message);
+  function githubGetFile(path) {
+    var config = ghEnsureConfig();
+    if (!config) return Promise.reject(new Error('GitHub config ausente.'));
+    return fetch(ghApiUrl(path) + '?ref=' + encodeURIComponent(config.branch || 'main'), {
+      method: 'GET',
+      headers: ghHeaders()
+    }).then(function (res) {
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error('GET ' + path + ' falhou (' + res.status + ')');
+      return res.json();
     });
-}
+  }
 
-/* ── Deploy Status ──────────────────────────────────────────────────── */
-
-var _ghDeployPollTimer;
-
-// Escreve o status de deploy no arquivo JSON
-function _ghWriteDeployStatus(saving) {
-  if (!ghGetToken()) return;
-  var content = JSON.stringify({ saving: saving, ts: Date.now() });
-  githubGetFile('deploy-status.json')
-    .then(function (data) {
-      return githubPutFile('deploy-status.json', content, data.sha, 'deploy status');
-    })
-    .catch(function () {
-      return githubPutFile('deploy-status.json', content, null, 'deploy status init');
+  function githubPutFile(path, content, sha, message) {
+    var config = ghEnsureConfig();
+    var token = ghEnsureToken();
+    var body;
+    if (!config || !token) return Promise.reject(new Error('GitHub nao configurado.'));
+    body = {
+      message: message || 'Update ' + path,
+      content: ghEncodeBase64(content),
+      branch: config.branch || 'main'
+    };
+    if (sha) body.sha = sha;
+    return fetch(ghApiUrl(path), {
+      method: 'PUT',
+      headers: ghHeaders(),
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (txt) {
+          throw new Error('PUT ' + path + ' falhou (' + res.status + '): ' + txt);
+        });
+      }
+      return res.json();
     });
-}
+  }
 
-// Polling do arquivo de deploy status — exibe dot pulsante no header
-function ghReadDeployStatus() {
-  clearInterval(_ghDeployPollTimer);
-  _ghDeployPollTimer = setInterval(function () {
-    githubGetFile('deploy-status.json')
-      .then(function (data) {
-        var raw = ghDecodeBase64(data.content.replace(/\n/g, ''));
-        var obj;
-        try { obj = JSON.parse(raw); } catch (e) { return; }
-        var dot = document.getElementById('deployDot');
-        if (!dot) {
-          dot = document.createElement('span');
-          dot.id = 'deployDot';
-          dot.className = 'deploy-dot';
-          dot.title = 'Alguém está salvando…';
-          dot.style.display = 'none';
-          var headerRight = document.querySelector('.header-controls');
-          if (headerRight) headerRight.prepend(dot);
-        }
-        dot.style.display = obj.saving ? 'inline-block' : 'none';
+  function githubDeleteFile(path, sha, message) {
+    var config = ghEnsureConfig();
+    var token = ghEnsureToken();
+    if (!config || !token) return Promise.reject(new Error('GitHub nao configurado.'));
+    return fetch(ghApiUrl(path), {
+      method: 'DELETE',
+      headers: ghHeaders(),
+      body: JSON.stringify({
+        message: message || 'Delete ' + path,
+        sha: sha,
+        branch: config.branch || 'main'
       })
-      .catch(function () {});
-  }, 8000);
-}
-
-/* ── Injeção no header ──────────────────────────────────────────────── */
-
-document.addEventListener('DOMContentLoaded', function () {
-  _ghInjectHeaderButtons();
-  _ghInjectSaveButton();
-  _ghInjectAddButton();
-  ghReadDeployStatus();
-});
-
-function _ghInjectHeaderButtons() {
-  var controls = document.querySelector('.header-controls');
-  if (!controls) return;
-
-  // Botão cadeado
-  var lock = document.createElement('button');
-  lock.id        = 'ghLockBtn';
-  lock.className = 'btn-lock' + (ghGetToken() ? ' configured' : '');
-  lock.title     = ghGetToken() ? 'Token configurado' : 'Configurar token GitHub';
-  lock.innerHTML = ghGetToken()
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Conectado'
-    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg> Configurar';
-  lock.addEventListener('click', _ghOpenConfigModal);
-  controls.appendChild(lock);
-
-  // Botão de engrenagem (localhost / config)
-  if (!window.location.hostname.endsWith('.github.io')) {
-    var gear = document.createElement('button');
-    gear.className = 'theme-toggle';
-    gear.title     = 'Configurar owner/repo';
-    gear.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
-    gear.addEventListener('click', _ghOpenRepoConfigModal);
-    controls.appendChild(gear);
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (txt) {
+          throw new Error('DELETE ' + path + ' falhou (' + res.status + '): ' + txt);
+        });
+      }
+      return res.json();
+    });
   }
-}
 
-function _ghUpdateLockBtn() {
-  var btn = document.getElementById('ghLockBtn');
-  if (!btn) return;
-  var ok = !!ghGetToken();
-  btn.className = 'btn-lock' + (ok ? ' configured' : '');
-  btn.innerHTML = ok
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Conectado'
-    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg> Configurar';
-}
+  function ghFindObjectEnd(content, braceStart) {
+    var depth = 0;
+    var quote = null;
+    var escaped = false;
+    var i;
+    var ch;
+    for (i = braceStart; i < content.length; i += 1) {
+      ch = content.charAt(i);
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') {
+        quote = ch;
+      } else if (ch === '{') {
+        depth += 1;
+      } else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) return i + 1;
+      }
+    }
+    return -1;
+  }
 
-/* ── Modal de configuração de token ─────────────────────────────────── */
+  function ghFindMarkedBlock(content, id) {
+    var marker = '/*@@@@Senko - ' + id + ' */';
+    var start = content.indexOf(marker);
+    var braceStart;
+    var objectEnd;
+    var end;
+    var hasComma = false;
+    if (start < 0) return null;
+    braceStart = content.indexOf('{', start + marker.length);
+    if (braceStart < 0) return null;
+    objectEnd = ghFindObjectEnd(content, braceStart);
+    if (objectEnd < 0) return null;
+    end = objectEnd;
+    while (/\s/.test(content.charAt(end))) end += 1;
+    if (content.charAt(end) === ',') {
+      hasComma = true;
+      end += 1;
+    }
+    return { start: start, end: end, objectEnd: objectEnd, hasComma: hasComma };
+  }
 
-function _ghOpenConfigModal() {
-  var existing = document.getElementById('ghConfigOverlay');
-  if (existing) { existing.classList.remove('hidden'); return; }
+  function ghReplaceOrAppendBlock(content, id, block) {
+    var found = ghFindMarkedBlock(content, id);
+    var insertAt;
+    var before;
+    var needsComma;
+    if (found) {
+      return content.slice(0, found.start) + block + (found.hasComma ? ',' : '') + content.slice(found.end);
+    }
+    insertAt = content.lastIndexOf('\n]);');
+    if (insertAt < 0) insertAt = content.lastIndexOf(']);');
+    if (insertAt < 0) return content + '\n' + block + '\n';
+    before = content.slice(0, insertAt).replace(/\s+$/, '');
+    needsComma = before.lastIndexOf('{') > before.lastIndexOf('[') && !/,\s*$/.test(before);
+    return before + (needsComma ? ',\n' : '\n') + block + '\n' + content.slice(insertAt);
+  }
 
-  var overlay = document.createElement('div');
-  overlay.id        = 'ghConfigOverlay';
-  overlay.className = 'modal-overlay';
+  function ghRemoveMarkedBlock(content, id) {
+    var found = ghFindMarkedBlock(content, id);
+    var before;
+    var after;
+    if (!found) return content;
+    before = content.slice(0, found.start).replace(/[ \t]*$/, '');
+    after = content.slice(found.end).replace(/^\s*,?/, '\n');
+    if (/,\s*$/.test(before) && /^\s*\]/.test(after)) {
+      before = before.replace(/,\s*$/, '\n');
+    }
+    return before + after;
+  }
 
-  overlay.innerHTML =
-    '<div class="modal" style="max-width:440px;">' +
-      '<div class="modal-header">' +
-        '<div><span class="modal-category">GitHub</span><h2 class="modal-title">Configurar Token</h2></div>' +
-        '<button class="modal-close" id="ghCloseConfigBtn">✕</button>' +
-      '</div>' +
-      '<div style="padding:1.25rem;display:flex;flex-direction:column;gap:1rem;">' +
-        '<div class="field-group">' +
-          '<label>Personal Access Token</label>' +
-          '<input type="password" id="ghTokenInput" placeholder="ghp_…" value="' + ghGetToken() + '">' +
-          '<span class="field-desc">Precisará de permissão <strong>repo</strong>. <a href="https://github.com/settings/tokens" target="_blank">Criar token</a></span>' +
-        '</div>' +
-        '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
-          '<button class="btn btn-ghost" id="ghConfigCancelBtn">Cancelar</button>' +
-          '<button class="btn btn-primary" id="ghConfigSaveBtn">Salvar</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>';
+  function ghSetSaving(isSaving) {
+    var dot = $('ghStatusDot');
+    _ghSaving = isSaving;
+    if (dot) dot.classList.toggle('saving', !!isSaving);
+  }
 
-  document.body.appendChild(overlay);
-  overlay.querySelector('#ghCloseConfigBtn').addEventListener('click',  function () { overlay.classList.add('hidden'); });
-  overlay.querySelector('#ghConfigCancelBtn').addEventListener('click', function () { overlay.classList.add('hidden'); });
-  overlay.querySelector('#ghConfigSaveBtn').addEventListener('click', function () {
-    ghSetToken(document.getElementById('ghTokenInput').value);
+  function ghSaveEditedLayout() {
+    var data = global.getCurrentEditLayoutData ? global.getCurrentEditLayoutData() : null;
+    var path = 'layouts/layouts001.js';
+    if (!data || !data.id) return;
+    if (_ghSaving) return global.showToast('Salvamento em andamento.');
+    ghSetSaving(true);
+    githubGetFile(path).then(function (file) {
+      var content = file ? ghDecodeBase64(file.content) : 'SenkoLib.register([\n]);\n';
+      var next = ghReplaceOrAppendBlock(content, data.id, global.formatLayoutBlock(data));
+      return githubPutFile(path, next, file && file.sha, 'Update layout ' + data.id);
+    }).then(function () {
+      if (global.state.currentEdit) {
+        global.state.currentEdit.name = data.name;
+        global.state.currentEdit.tags = data.tags;
+        global.state.currentEdit.html = data.html;
+        global.state.currentEdit.css = data.css;
+      }
+      global.showToast('✓ Layout salvo no GitHub!');
+      if (global.renderGrid) global.renderGrid();
+    }).catch(function (err) {
+      console.error(err);
+      global.showToast('Falha ao salvar layout.');
+    }).then(function () {
+      ghSetSaving(false);
+    });
+  }
+
+  function ghSaveNewLayout() {
+    var data = global.getAddLayoutFormData ? global.getAddLayoutFormData() : null;
+    var select = $('ghAddLayoutFileSelect');
+    var path = select ? select.value : 'layouts/layouts001.js';
+    if (!data) return;
+    if (_ghSaving) return global.showToast('Salvamento em andamento.');
+    ghSetSaving(true);
+    githubGetFile(path).then(function (file) {
+      var content = file ? ghDecodeBase64(file.content) : '/*\n * Pacote de layouts\n */\nSenkoLib.register([\n]);\n';
+      var next = ghReplaceOrAppendBlock(content, data.id, global.formatLayoutBlock(data));
+      return githubPutFile(path, next, file && file.sha, 'Add layout ' + data.id);
+    }).then(function () {
+      SenkoLib.register([data]);
+      global.showToast('✓ Layout criado no GitHub!');
+      if (global.closeAddModal) global.closeAddModal();
+      if (global.renderGrid) global.renderGrid();
+    }).catch(function (err) {
+      console.error(err);
+      global.showToast('Falha ao criar layout.');
+    }).then(function () {
+      ghSetSaving(false);
+    });
+  }
+
+  function ghCopyGeneratedLayout() {
+    var data = global.getAddLayoutFormData ? global.getAddLayoutFormData() : null;
+    if (!data) return;
+    global.copyToClipboard(global.formatLayoutBlock(data), this, '✓ Código copiado!');
+  }
+
+  function ghOpenConfigModal() {
+    var overlay = $('ghConfigOverlay');
+    var config = ghGetConfig();
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'ghConfigOverlay';
+      overlay.className = 'modal-overlay hidden';
+      overlay.innerHTML =
+        '<div class="modal gh-config-modal" role="dialog" aria-modal="true">' +
+          '<div class="modal-header"><div><div class="modal-category">GitHub</div><h2 class="modal-title">Configuração</h2></div><button class="modal-close" id="ghConfigCloseBtn" type="button">×</button></div>' +
+          '<div class="modal-body">' +
+            '<label class="field-group">Owner <input id="ghOwnerInput" type="text"></label>' +
+            '<label class="field-group">Repo <input id="ghRepoInput" type="text"></label>' +
+            '<label class="field-group">Branch <input id="ghBranchInput" type="text"></label>' +
+            '<label class="field-group">Token <input id="ghTokenInput" type="password" autocomplete="off"></label>' +
+            '<div class="modal-footer"><button class="btn btn-ghost" id="ghClearTokenBtn" type="button">Limpar token</button><button class="btn btn-primary" id="ghSaveConfigBtn" type="button">Salvar</button></div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(overlay);
+      $('ghConfigCloseBtn').addEventListener('click', ghCloseConfigModal);
+      $('ghClearTokenBtn').addEventListener('click', function () {
+        $('ghTokenInput').value = '';
+        ghSetToken('');
+      });
+      $('ghSaveConfigBtn').addEventListener('click', function () {
+        ghSetConfig({
+          owner: $('ghOwnerInput').value.trim(),
+          repo: $('ghRepoInput').value.trim(),
+          branch: $('ghBranchInput').value.trim() || 'main'
+        });
+        ghSetToken($('ghTokenInput').value.trim());
+        ghCloseConfigModal();
+        global.showToast('✓ Configuração salva!');
+      });
+      overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) ghCloseConfigModal();
+      });
+    }
+    $('ghOwnerInput').value = config.owner || '';
+    $('ghRepoInput').value = config.repo || '';
+    $('ghBranchInput').value = config.branch || 'main';
+    $('ghTokenInput').value = ghGetToken();
+    overlay.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function ghCloseConfigModal() {
+    var overlay = $('ghConfigOverlay');
+    if (!overlay) return;
     overlay.classList.add('hidden');
-  });
-}
+    if (!document.querySelector('.modal-overlay:not(.hidden)')) document.body.style.overflow = '';
+  }
 
-function _ghOpenRepoConfigModal() {
-  var owner = prompt('Owner (usuário/org GitHub):', _ghOwner);
-  if (owner === null) return;
-  var repo  = prompt('Repo:', _ghRepo);
-  if (repo  === null) return;
-  _ghOwner = owner.trim();
-  _ghRepo  = repo.trim();
-  localStorage.setItem('senkolib_github_config', JSON.stringify({ owner: _ghOwner, repo: _ghRepo }));
-  showToast();
-}
+  function ghUpdateLockButton() {
+    var btn = $('ghLockBtn');
+    if (!btn) return;
+    btn.textContent = ghGetToken() ? '🔓' : '🔒';
+    btn.title = ghGetToken() ? 'Token configurado' : 'Configurar token';
+  }
 
-/* ── Injetar botão de salvar no modal de editar ─────────────────────── */
+  function ghInjectHeaderButtons() {
+    var controls = document.querySelector('.header-controls');
+    var lock;
+    var gear;
+    var dot;
+    if (!controls || $('ghLockBtn')) return;
+    dot = document.createElement('span');
+    dot.id = 'ghStatusDot';
+    dot.className = 'gh-status-dot';
+    dot.title = 'Status de deploy';
+    lock = document.createElement('button');
+    lock.id = 'ghLockBtn';
+    lock.className = 'theme-toggle';
+    lock.type = 'button';
+    gear = document.createElement('button');
+    gear.id = 'ghConfigBtn';
+    gear.className = 'theme-toggle';
+    gear.type = 'button';
+    gear.textContent = '⚙';
+    gear.title = 'Configurar GitHub';
+    controls.appendChild(dot);
+    controls.appendChild(lock);
+    controls.appendChild(gear);
+    lock.addEventListener('click', ghOpenConfigModal);
+    gear.addEventListener('click', ghOpenConfigModal);
+    ghUpdateLockButton();
+  }
 
-function _ghInjectSaveButton() {
-  var anchor = document.getElementById('saveToFileBtn');
-  if (!anchor) return;
+  function ghInjectLayoutButtons() {
+    var editAnchor = $('saveToFileBtn');
+    var addAnchor = $('copyGeneratedBtn');
+    var btn;
+    var copy;
+    var select;
+    var i;
+    if (editAnchor && !editAnchor.querySelector('[data-gh-save-layout]')) {
+      btn = document.createElement('button');
+      btn.className = 'btn btn-primary';
+      btn.type = 'button';
+      btn.setAttribute('data-gh-save-layout', '1');
+      btn.textContent = 'GitHub';
+      btn.addEventListener('click', ghSaveEditedLayout);
+      editAnchor.appendChild(btn);
+    }
+    if (addAnchor && !addAnchor.querySelector('[data-gh-add-layout]')) {
+      select = document.createElement('select');
+      select.id = 'ghAddLayoutFileSelect';
+      for (i = 0; i < _layoutFiles.length; i += 1) {
+        select.appendChild(new Option(_layoutFiles[i], _layoutFiles[i]));
+      }
+      copy = document.createElement('button');
+      copy.className = 'btn btn-ghost';
+      copy.type = 'button';
+      copy.textContent = 'Copiar';
+      copy.addEventListener('click', ghCopyGeneratedLayout);
+      btn = document.createElement('button');
+      btn.className = 'btn btn-primary';
+      btn.type = 'button';
+      btn.setAttribute('data-gh-add-layout', '1');
+      btn.textContent = 'GitHub';
+      btn.addEventListener('click', ghSaveNewLayout);
+      addAnchor.appendChild(select);
+      addAnchor.appendChild(copy);
+      addAnchor.appendChild(btn);
+    }
+  }
 
-  var btn = document.createElement('button');
-  btn.className   = 'btn btn-primary';
-  btn.textContent = 'Salvar no GitHub';
-  btn.addEventListener('click', function () {
-    if (!state.currentEdit) return;
-    var layout = state.currentEdit;
-    layout.name = document.getElementById('editLayoutName').value.trim() || layout.name;
-    layout.tags = (document.getElementById('editLayoutTags').value || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
-    layout.html = document.getElementById('editHtmlTextarea').value;
-    layout.css  = document.getElementById('editCssTextarea').value;
-    ghSaveLayout(layout, function () {
-      renderGrid();
-      closeEditModal();
-    });
-  });
-  anchor.appendChild(btn);
-}
+  function ghPollDeployStatus() {
+    if (!ghGetConfig().owner || !ghGetConfig().repo) return;
+    githubGetFile('deploy-status.json').then(function (file) {
+      var data;
+      var dot = $('ghStatusDot');
+      if (!file || !dot) return;
+      data = JSON.parse(ghDecodeBase64(file.content));
+      dot.classList.toggle('saving', !!data.saving);
+    }).catch(function () {});
+  }
 
-/* ── Injetar select + botão de salvar no modal de adicionar ─────────── */
+  function init() {
+    ghInjectHeaderButtons();
+    ghInjectLayoutButtons();
+    if (_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = setInterval(ghPollDeployStatus, 15000);
+  }
 
-function _ghInjectAddButton() {
-  var anchor = document.getElementById('copyGeneratedBtn');
-  if (!anchor) return;
+  global.ghEncodeBase64 = ghEncodeBase64;
+  global.ghDecodeBase64 = ghDecodeBase64;
+  global.ghGetToken = ghGetToken;
+  global.ghSetToken = ghSetToken;
+  global.ghEnsureToken = ghEnsureToken;
+  global.ghGetConfig = ghGetConfig;
+  global.githubGetFile = githubGetFile;
+  global.githubPutFile = githubPutFile;
+  global.githubDeleteFile = githubDeleteFile;
+  global.ghFindMarkedBlock = ghFindMarkedBlock;
+  global.ghReplaceOrAppendBlock = ghReplaceOrAppendBlock;
+  global.ghRemoveMarkedBlock = ghRemoveMarkedBlock;
+  global.ghInjectLayoutButtons = ghInjectLayoutButtons;
 
-  var btn = document.createElement('button');
-  btn.className   = 'btn btn-primary';
-  btn.style.fontSize = 'var(--font-size-xs)';
-  btn.textContent = 'Salvar no GitHub';
-  btn.addEventListener('click', function () {
-    var id   = (document.getElementById('newLayoutId')   || {}).value || '';
-    var name = (document.getElementById('newLayoutName') || {}).value || '';
-    var tags = ((document.getElementById('newLayoutTags') || {}).value || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
-    var html = (document.getElementById('newLayoutHtml') || {}).value || '';
-    var css  = (document.getElementById('newLayoutCss')  || {}).value || '';
-    if (!id || !name) { alert('Preencha ID e Nome.'); return; }
-    ghSaveLayout({ id: id, name: name, tags: tags, html: html, css: css }, function () {
-      SenkoLib.register([{ id: id, name: name, tags: tags, html: html, css: css }]);
-      renderGrid();
-      closeAddModal();
-    });
-  });
-  anchor.appendChild(btn);
-}
+  document.addEventListener('DOMContentLoaded', init);
+}(window));

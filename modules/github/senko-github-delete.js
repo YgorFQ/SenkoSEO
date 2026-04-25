@@ -1,104 +1,97 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   senko-github-delete.js — Exclusão de layouts do GitHub
+/*
+ * Senko GitHub Delete
+ * Responsabilidade: excluir layouts da biblioteca via GitHub API.
+ * Dependencias: senko-github-v2.js e core/script.js.
+ * Expoe: ghInjectLayoutDeleteButton.
+ */
+(function (global) {
+  var _deleteLayoutId = null;
+  var _saving = false;
 
-   RESPONSABILIDADE:
-     Injeta botão de excluir no modal de editar layout. Ao confirmar,
-     remove o bloco @@@@Senko do arquivo de layouts e commita.
+  function $(id) {
+    return document.getElementById(id);
+  }
 
-   EXPÕE (globais):
-     Nenhuma (autoexecutado no DOMContentLoaded).
+  function ghDeleteCurrentLayout() {
+    var path = 'layouts/layouts001.js';
+    var id = _deleteLayoutId;
+    if (!id) return;
+    if (_saving) return global.showToast('Salvamento em andamento.');
+    _saving = true;
+    global.githubGetFile(path).then(function (file) {
+      var content;
+      var next;
+      if (!file) throw new Error('Arquivo de layouts nao encontrado.');
+      content = global.ghDecodeBase64(file.content);
+      next = global.ghRemoveMarkedBlock(content, id);
+      return global.githubPutFile(path, next, file.sha, 'Delete layout ' + id);
+    }).then(function () {
+      if (SenkoLib.remove) SenkoLib.remove(id);
+      global.showToast('✓ Layout excluído!');
+      ghCloseLayoutDeleteModal();
+      if (global.closeEditModal) global.closeEditModal();
+      if (global.renderGrid) global.renderGrid();
+    }).catch(function (err) {
+      console.error(err);
+      global.showToast('Falha ao excluir layout.');
+    }).then(function () {
+      _saving = false;
+    });
+  }
 
-   DEPENDÊNCIAS:
-     senko-github-v2.js, modal-edit.js, col-modals.js (colOpenConfirm)
+  function ghEnsureLayoutDeleteModal() {
+    var overlay = $('ghLayoutDeleteOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'ghLayoutDeleteOverlay';
+    overlay.className = 'modal-overlay hidden';
+    overlay.innerHTML =
+      '<div class="modal col-confirm-modal" role="dialog" aria-modal="true">' +
+        '<div class="col-form-header"><h2 class="col-confirm-title">Excluir layout</h2><button class="modal-close" id="ghLayoutDeleteCloseBtn" type="button">×</button></div>' +
+        '<p class="col-confirm-body" id="ghLayoutDeleteBody"></p>' +
+        '<div class="col-confirm-actions"><button class="col-btn-cancel" id="ghLayoutDeleteCancelBtn" type="button">Cancelar</button><button class="col-btn-delete" id="ghLayoutDeleteOkBtn" type="button">Excluir</button></div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    $('ghLayoutDeleteCloseBtn').addEventListener('click', ghCloseLayoutDeleteModal);
+    $('ghLayoutDeleteCancelBtn').addEventListener('click', ghCloseLayoutDeleteModal);
+    $('ghLayoutDeleteOkBtn').addEventListener('click', ghDeleteCurrentLayout);
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) ghCloseLayoutDeleteModal();
+    });
+    return overlay;
+  }
 
-   ORDEM DE CARREGAMENTO:
-     Após senko-github-variants.js
-═══════════════════════════════════════════════════════════════════════ */
+  function ghOpenLayoutDeleteModal() {
+    var current = global.getCurrentEditLayoutData ? global.getCurrentEditLayoutData() : null;
+    var overlay;
+    if (!current || !current.id) return;
+    _deleteLayoutId = current.id;
+    overlay = ghEnsureLayoutDeleteModal();
+    $('ghLayoutDeleteBody').textContent = 'O layout "' + current.name + '" será removido de layouts/layouts001.js.';
+    overlay.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
 
-document.addEventListener('DOMContentLoaded', function () {
-  setTimeout(_ghdInjectDeleteButton, 400);
-});
+  function ghCloseLayoutDeleteModal() {
+    var overlay = $('ghLayoutDeleteOverlay');
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    if (!document.querySelector('.modal-overlay:not(.hidden)')) document.body.style.overflow = '';
+  }
 
-/* ── Injeção do botão de excluir ────────────────────────────────────── */
+  function ghInjectLayoutDeleteButton() {
+    var btn = $('editLayoutDeleteBtn');
+    if (!btn || btn._ghDeleteBound) return;
+    btn._ghDeleteBound = true;
+    btn.classList.remove('hidden');
+    btn.addEventListener('click', ghOpenLayoutDeleteModal);
+  }
 
-function _ghdInjectDeleteButton() {
-  var headerRight = document.querySelector('#editModal .modal-header-right');
-  if (!headerRight || document.getElementById('ghDeleteLayoutBtn')) return;
+  function init() {
+    ghInjectLayoutDeleteButton();
+  }
 
-  var btn = document.createElement('button');
-  btn.id        = 'ghDeleteLayoutBtn';
-  btn.className = 'btn btn-ghost';
-  btn.style.color       = 'var(--red)';
-  btn.style.borderColor = 'var(--red)';
-  btn.innerHTML =
-    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
-    '<polyline points="3 6 5 6 21 6"/>' +
-    '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' +
-    '<path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg> Excluir';
-  btn.addEventListener('click', _ghdConfirmDelete);
+  global.ghInjectLayoutDeleteButton = ghInjectLayoutDeleteButton;
 
-  // Insere antes do botão de fechar
-  var closeBtn = headerRight.querySelector('.modal-close');
-  headerRight.insertBefore(btn, closeBtn);
-}
-
-/* ── Confirmação e exclusão ─────────────────────────────────────────── */
-
-function _ghdConfirmDelete() {
-  if (!state.currentEdit) return;
-  var layout = state.currentEdit;
-
-  colOpenConfirm({
-    title:     'Excluir layout',
-    body:      'Excluir "' + layout.name + '" (ID: ' + layout.id + ') permanentemente do arquivo de layouts? Esta ação não pode ser desfeita.',
-    labelOk:   'Excluir',
-    danger:    true,
-    onConfirm: function () { _ghdDeleteLayout(layout); },
-  });
-}
-
-function _ghdDeleteLayout(layout) {
-  if (!ghEnsureToken()) return;
-  var filePath = 'layouts/layouts001.js';
-
-  githubGetFile(filePath)
-    .then(function (data) {
-      var content = ghDecodeBase64(data.content.replace(/\n/g, ''));
-      var sha     = data.sha;
-
-      // Remove bloco do layout pelo marcador @@@@Senko
-      var marker = '/*@@@@Senko - ' + layout.id + ' */';
-      var start  = content.indexOf(marker);
-      if (start === -1) throw new Error('Layout não encontrado no arquivo.');
-
-      var objStart = content.indexOf('{', start + marker.length);
-      var depth = 0, inBt = false, i = objStart;
-      while (i < content.length) {
-        var ch = content[i];
-        if (ch === '`' && !inBt)  { inBt = true;  i++; continue; }
-        if (ch === '`' &&  inBt)  { inBt = false; i++; continue; }
-        if (ch === '\\' && inBt)  { i += 2; continue; }
-        if (!inBt) {
-          if (ch === '{') depth++;
-          if (ch === '}') { depth--; if (depth === 0) break; }
-        }
-        i++;
-      }
-      var end = i + 1;
-      if (content[end] === ',') end++;
-
-      var updated = (content.slice(0, start) + content.slice(end)).replace(/\n{3,}/g, '\n\n');
-      return githubPutFile(filePath, updated, sha, 'SenkoLib: delete ' + layout.id);
-    })
-    .then(function () {
-      showToast();
-      closeEditModal();
-      // Remove da memória e re-renderiza
-      var all = SenkoLib.getAll();
-      var idx = all.findIndex(function (l) { return l.id === layout.id; });
-      // SenkoLib não tem removeLayout, mas podemos marcar internamente
-      // Re-renderiza o grid (o layout removido não aparece mais pois está no arquivo)
-      renderGrid();
-    })
-    .catch(function (err) { alert('Erro ao excluir: ' + err.message); });
-}
+  document.addEventListener('DOMContentLoaded', init);
+}(window));

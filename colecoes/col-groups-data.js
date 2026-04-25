@@ -1,20 +1,11 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   col-groups-data.js — Dados dos grupos (gerado pelo módulo GitHub)
-
-   RESPONSABILIDADE:
-     Carrega os grupos confirmados no ColGroups. Este arquivo é
-     regenerado automaticamente pelo senko-github-col.js sempre que
-     um novo grupo é criado e commitado no repositório.
-
-   DEPENDÊNCIAS:
-     col-groups.js
-
-   ORDEM DE CARREGAMENTO:
-     Imediatamente após col-groups.js
-═══════════════════════════════════════════════════════════════════════ */
-
+/*
+ * Dados de grupos
+ * Responsabilidade: carregar grupos confirmados no motor ColGroups.
+ * Dependencias: colecoes/col-groups.js.
+ * Expoe: dados via ColGroups.load().
+ */
 ColGroups.load([
-  { slug: 'ygor',  name: 'Ygor',  cor: '#1a9e52' },
-  { slug: 'joel',  name: 'Joel',  cor: '#06b6d4' },
-  { slug: 'pedro', name: 'pedro', cor: '#f59e0b' },
+  { slug: 'ygor', name: 'Ygor', cor: '#1a9e52' },
+  { slug: 'joel', name: 'Joel', cor: '#06b6d4' },
+  { slug: 'pedro', name: 'pedro', cor: '#f59e0b' }
 ]);

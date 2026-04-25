@@ -1,285 +1,241 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   col-script.js — UI da aba Coleções
-
-   RESPONSABILIDADE:
-     Injeta a barra de abas no DOM, cria o #colDashboard dinâmico,
-     gerencia troca entre abas (Biblioteca ↔ Coleções) e renderiza
-     o grid de cards de coleção com filtros por grupo. Usa
-     getActiveTab() para busca contextual sem checar display do DOM.
-
-   EXPÕE (globais):
-     colSwitchTab(tab)        → void
-     colRenderGrid()          → void
-     colRenderFilterBar()     → void
-     colOpenCollection(col)   → void  (abre modal de visualização)
-
-   DEPENDÊNCIAS:
-     utils.js, col-groups.js, col-core.js, col-modals.js
-
-   ORDEM DE CARREGAMENTO:
-     Após col-core.js, antes de col-modals.js
-═══════════════════════════════════════════════════════════════════════ */
-
-/* ── Estado ─────────────────────────────────────────────────────────── */
+/*
+ * UI da aba Colecoes
+ * Responsabilidade: inserir abas, dashboard, filtros e grid de colecoes.
+ * Dependencias: ColGroups, ColLib e helpers globais da Biblioteca.
+ * Expoe: colSwitchTab, colRenderGrid, colOpenCollection.
+ */
 var colState = { activeGroup: null, search: '' };
 
-// Flag de performance: só re-renderiza se houver mutação de dados
-var _colGridDirty   = true;
-var _colGridRendered = false;
+(function (global) {
+  function $(id) {
+    return document.getElementById(id);
+  }
 
-/* ── Init: injetar barra de abas e #colDashboard ────────────────────── */
-document.addEventListener('DOMContentLoaded', function () {
-  _injectTabBar();
-  _createColDashboard();
-  _hookSearchInput();
-});
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
 
-/* ── Barra de abas ──────────────────────────────────────────────────── */
+  function getGroup(slug) {
+    return ColGroups.getBySlug(slug) || { slug: slug || '', name: slug || 'Sem grupo', cor: '#e36a00' };
+  }
 
-function _injectTabBar() {
-  var header = document.querySelector('.site-header');
-  if (!header) return;
+  function initTabs() {
+    var header = document.querySelector('.site-header');
+    var tabs;
+    if ($('colTabBar') || !header) return;
+    tabs = document.createElement('div');
+    tabs.id = 'colTabBar';
+    tabs.className = 'col-tab-bar';
+    tabs.innerHTML =
+      '<button id="colTabBiblioteca" class="col-tab-btn active" type="button">Biblioteca</button>' +
+      '<button id="colTabColecoes" class="col-tab-btn" type="button">Coleções</button>';
+    header.parentNode.insertBefore(tabs, header.nextSibling);
+    $('colTabBiblioteca').addEventListener('click', function () { colSwitchTab('biblioteca'); });
+    $('colTabColecoes').addEventListener('click', function () { colSwitchTab('colecoes'); });
+  }
 
-  var bar = document.createElement('div');
-  bar.className = 'tab-bar';
-  bar.innerHTML =
-    '<button class="tab-btn active" data-tab="biblioteca">Biblioteca</button>' +
-    '<button class="tab-btn"        data-tab="colecoes">Coleções</button>';
+  function initDashboard() {
+    var dashboard = $('dashboard');
+    var colDashboard;
+    if ($('colDashboard') || !dashboard) return;
+    colDashboard = document.createElement('main');
+    colDashboard.id = 'colDashboard';
+    colDashboard.className = 'col-dashboard';
+    colDashboard.style.display = 'none';
+    colDashboard.innerHTML =
+      '<div class="col-filter-bar" id="colFilterBar"></div>' +
+      '<div class="col-stats-bar" id="colStatsBar"></div>' +
+      '<div class="col-grid" id="colGrid"></div>';
+    dashboard.parentNode.insertBefore(colDashboard, dashboard.nextSibling);
+  }
 
-  header.insertAdjacentElement('afterend', bar);
+  function colSwitchTab(tab) {
+    var dashboard = $('dashboard');
+    var colDashboard = $('colDashboard');
+    var search = $('searchInput');
+    var isCol = tab === 'colecoes';
 
-  bar.querySelectorAll('.tab-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      colSwitchTab(btn.dataset.tab);
-    });
-  });
-}
+    if (!dashboard || !colDashboard) return;
+    dashboard.style.display = isCol ? 'none' : '';
+    colDashboard.style.display = isCol ? '' : 'none';
+    $('colTabBiblioteca').classList.toggle('active', !isCol);
+    $('colTabColecoes').classList.toggle('active', isCol);
 
-/* ── Criar #colDashboard ────────────────────────────────────────────── */
-
-function _createColDashboard() {
-  if (document.getElementById('colDashboard')) return;
-
-  var dash = document.createElement('div');
-  dash.id        = 'colDashboard';
-  dash.className = 'col-dashboard';
-  dash.style.display = 'none';
-
-  dash.innerHTML =
-    '<div class="col-filter-bar" id="colFilterBar"></div>' +
-    '<div class="col-stats-bar"  id="colStatsBar"></div>' +
-    '<div class="col-grid"       id="colGrid"></div>';
-
-  var libDash = document.getElementById('dashboard');
-  if (libDash) libDash.insertAdjacentElement('afterend', dash);
-  else         document.body.appendChild(dash);
-}
-
-/* ── Troca de aba ───────────────────────────────────────────────────── */
-
-// Gerencia transição Biblioteca ↔ Coleções sem destruir o DOM
-function colSwitchTab(tab) {
-  setActiveTab(tab);
-
-  var libDash = document.getElementById('dashboard');
-  var colDash = document.getElementById('colDashboard');
-  var searchInput = document.getElementById('searchInput');
-
-  if (tab === 'biblioteca') {
-    if (libDash) libDash.style.display = '';
-    if (colDash) colDash.style.display = 'none';
-    if (searchInput) searchInput.placeholder = 'Buscar layouts…';
-  } else {
-    if (libDash) libDash.style.display = 'none';
-    if (colDash) colDash.style.display = '';
-    if (searchInput) searchInput.placeholder = 'Buscar coleções…';
-    // Renderiza grid apenas na primeira abertura ou quando há mutação
-    if (!_colGridRendered || _colGridDirty) {
-      colRenderFilterBar();
-      colRenderGrid();
-      _colGridRendered = true;
-      _colGridDirty    = false;
+    if (search) {
+      search.placeholder = isCol ? 'Buscar coleções...' : 'Buscar layouts...';
+      if (isCol) {
+        colState.search = search.value;
+      } else {
+        global.state.search = search.value;
+        if (global.renderGrid) global.renderGrid();
+      }
     }
+
+    if (isCol) colRenderGrid();
   }
 
-  // Atualizar visual das tabs
-  document.querySelectorAll('.tab-btn').forEach(function (btn) {
-    btn.classList.toggle('active', btn.dataset.tab === tab);
-  });
-}
+  function groupsWithCollections() {
+    var collections = ColLib.getAll();
+    var used = {};
+    var out = [];
+    var i;
+    var group;
+    for (i = 0; i < collections.length; i += 1) {
+      if (collections[i].group) used[collections[i].group] = true;
+    }
+    for (i = 0; i < collections.length; i += 1) {
+      group = getGroup(collections[i].group);
+      if (used[group.slug]) {
+        out.push(group);
+        used[group.slug] = false;
+      }
+    }
+    out.sort(function (a, b) {
+      return global.naturalCompare ? global.naturalCompare(a.name, b.name) : a.name.localeCompare(b.name);
+    });
+    return out;
+  }
 
-/* ── Filter bar de grupos ───────────────────────────────────────────── */
+  function colRenderFilterBar() {
+    var bar = $('colFilterBar');
+    var groups = groupsWithCollections();
+    var html = '<span class="col-filter-label">Grupo</span>';
+    var i;
 
-function colRenderFilterBar() {
-  var bar = document.getElementById('colFilterBar');
-  if (!bar) return;
+    if (!bar) return;
 
-  // Quais grupos têm pelo menos uma coleção
-  var allCols   = ColLib.getAll();
-  var usedSlugs = {};
-  allCols.forEach(function (c) { if (c.group) usedSlugs[c.group] = true; });
+    html += '<button class="col-pill' + (!colState.activeGroup ? ' active' : '') + '" type="button" data-col-group="" style="--col-pill-color: var(--accent)">' +
+      '<span class="col-pill-dot"></span>Todos</button>';
 
-  var allGroups = ColGroups.getAll().filter(function (g) {
-    return usedSlugs[g.slug];
-  });
+    for (i = 0; i < groups.length; i += 1) {
+      html += '<button class="col-pill' + (colState.activeGroup === groups[i].slug ? ' active' : '') + '" type="button" data-col-group="' + escapeHtml(groups[i].slug) + '" style="--col-pill-color: ' + escapeHtml(groups[i].cor) + '">' +
+        '<span class="col-pill-dot"></span>' + escapeHtml(groups[i].name) + '</button>';
+    }
 
-  var fragment = document.createDocumentFragment();
+    bar.innerHTML = html;
+    bar.onclick = function (event) {
+      var btn = event.target.closest('[data-col-group]');
+      if (!btn) return;
+      colState.activeGroup = btn.getAttribute('data-col-group') || null;
+      colRenderGrid();
+    };
+  }
 
-  // Pill "Todos"
-  var todos = document.createElement('button');
-  todos.className = 'col-pill' + (colState.activeGroup === null ? ' active' : '');
-  todos.style.background = colState.activeGroup === null ? 'var(--accent)' : '';
-  todos.textContent = 'Todos';
-  todos.addEventListener('click', function () {
-    colState.activeGroup = null;
+  function getFilteredCollections() {
+    var all = ColLib.getAll();
+    var term = String(colState.search || '').toLowerCase();
+    var out = [];
+    var i;
+    var col;
+    var group;
+    var haystack;
+    for (i = 0; i < all.length; i += 1) {
+      col = all[i];
+      group = getGroup(col.group);
+      haystack = (col.name + ' ' + group.name + ' ' + (col.tags || []).join(' ')).toLowerCase();
+      if (colState.activeGroup && col.group !== colState.activeGroup) continue;
+      if (term && haystack.indexOf(term) < 0) continue;
+      out.push(col);
+    }
+    out.sort(function (a, b) {
+      return global.naturalCompare ? global.naturalCompare(a.name, b.name) : a.name.localeCompare(b.name);
+    });
+    return out;
+  }
+
+  function colRenderGrid() {
+    var grid = $('colGrid');
+    var stats = $('colStatsBar');
+    var filtered = getFilteredCollections();
+    var total = ColLib.getAll().length;
+    var i;
+
     colRenderFilterBar();
-    colRenderGrid();
-  });
-  fragment.appendChild(todos);
-
-  // Pills por grupo
-  allGroups.forEach(function (g) {
-    var pill = document.createElement('button');
-    pill.className = 'col-pill' + (colState.activeGroup === g.slug ? ' active' : '');
-    if (colState.activeGroup === g.slug) pill.style.background = g.cor;
-    pill.innerHTML =
-      '<span class="col-pill-dot" style="background:' + g.cor + '"></span>' + g.name;
-    pill.addEventListener('click', function () {
-      colState.activeGroup = g.slug;
-      colRenderFilterBar();
-      colRenderGrid();
-    });
-    fragment.appendChild(pill);
-  });
-
-  bar.innerHTML = '';
-  bar.appendChild(fragment);
-}
-
-/* ── Grid de cards ──────────────────────────────────────────────────── */
-
-// Renderiza todos os cards de coleção filtrados por grupo e busca
-function colRenderGrid() {
-  var grid = document.getElementById('colGrid');
-  if (!grid) return;
-
-  var all = ColLib.getAll();
-
-  // Filtro de grupo
-  var filtered = colState.activeGroup
-    ? all.filter(function (c) { return c.group === colState.activeGroup; })
-    : all;
-
-  // Filtro de busca
-  var q = (colState.search || '').toLowerCase();
-  if (q) {
-    filtered = filtered.filter(function (c) {
-      return c.name.toLowerCase().indexOf(q) !== -1 ||
-        (c.tags || []).some(function (t) { return t.toLowerCase().indexOf(q) !== -1; });
-    });
-  }
-
-  // Stats
-  var statsBar = document.getElementById('colStatsBar');
-  if (statsBar) {
-    statsBar.textContent = filtered.length + ' de ' + all.length + ' coleção' +
-      (all.length !== 1 ? 'ões' : '');
-  }
-
-  var fragment = document.createDocumentFragment();
-
-  if (filtered.length === 0) {
-    var empty = document.createElement('div');
-    empty.className = 'col-empty';
-    empty.innerHTML =
-      '<div class="col-empty-icon">' +
-        '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".3"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' +
-      '</div>' +
-      '<p class="col-empty-hint">Nenhuma coleção encontrada.</p>';
+    if (!grid) return;
     grid.innerHTML = '';
-    grid.appendChild(empty);
-    return;
+    if (stats) stats.textContent = filtered.length + ' de ' + total + ' coleções';
+
+    if (!filtered.length) {
+      grid.innerHTML = '<div class="col-empty"><svg class="col-empty-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M6 7l1-3h10l1 3M6 7v13h12V7"></path></svg><strong>Nenhuma coleção encontrada</strong><span class="col-empty-hint">Ajuste a busca ou grupo ativo.</span></div>';
+      return;
+    }
+
+    for (i = 0; i < filtered.length; i += 1) {
+      grid.appendChild(colCreateCard(filtered[i]));
+    }
+
+    if (global.ghcolInjectButtons) global.ghcolInjectButtons();
   }
 
-  filtered.forEach(function (col, i) {
-    fragment.appendChild(_colCreateCard(col, i));
-  });
+  function colCreateCard(col) {
+    var group = getGroup(col.group);
+    var card = document.createElement('article');
+    var tags = col.tags || [];
+    var html = '';
+    var i;
 
-  grid.innerHTML = '';
-  grid.appendChild(fragment);
-}
+    html += '<span class="tag col-card-group-pill">' + escapeHtml(group.name) + '</span>';
+    for (i = 0; i < tags.length; i += 1) {
+      html += '<span class="tag">' + escapeHtml(tags[i]) + '</span>';
+    }
 
-/* ── Card de coleção ────────────────────────────────────────────────── */
+    card.className = 'col-card';
+    card.style.setProperty('--col-color', group.cor);
+    card.innerHTML =
+      '<div class="col-card-tags">' + html + '</div>' +
+      '<div class="col-card-body">' +
+        '<h3 class="col-card-name">' + escapeHtml(col.name) + '</h3>' +
+        '<div class="col-card-meta">' + (col.layouts ? col.layouts.length : 0) + ' layouts</div>' +
+      '</div>' +
+      '<div class="col-card-actions">' +
+        '<button class="btn btn-ghost col-edit-card-btn" type="button">Editar</button>' +
+        '<span class="col-delete-anchor" data-col-slug="' + escapeHtml(col.slug) + '"></span>' +
+      '</div>';
 
-function _colCreateCard(col, index) {
-  var grupo = ColGroups.getBySlug(col.group) || {};
-  var cor   = grupo.cor || 'var(--accent)';
-  var nLayouts = (col.layouts || []).length;
+    card.addEventListener('click', function () {
+      colOpenCollection(col);
+    });
+    card.querySelector('.col-edit-card-btn').addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (global.colOpenEditModal) global.colOpenEditModal(col);
+    });
+    card.querySelector('.col-delete-anchor').addEventListener('click', function (event) {
+      event.stopPropagation();
+    });
 
-  var card = document.createElement('div');
-  card.className = 'col-card';
-  card.style.animationDelay = (index * 40) + 'ms';
-  card.style.borderTopColor = cor;
+    return card;
+  }
 
-  var groupPill = '<span class="col-card-group-pill" style="background:' + cor + '">' +
-    (grupo.name || col.group) + '</span>';
+  function colOpenCollection(col) {
+    if (global.colOpenCollectionModal) global.colOpenCollectionModal(col);
+  }
 
-  var tagsHtml = (col.tags || []).map(function (t) {
-    return '<span class="tag">' + t + '</span>';
-  }).join('');
-
-  card.innerHTML =
-    '<div class="col-card-tags">' + groupPill + tagsHtml + '</div>' +
-    '<div class="col-card-body">' +
-      '<div class="col-card-name">' + col.name + '</div>' +
-      '<div class="col-card-meta">' + nLayouts + ' layout' + (nLayouts !== 1 ? 's' : '') + '</div>' +
-    '</div>' +
-    '<div class="col-card-actions">' +
-      '<button class="btn btn-ghost btn-edit-icon" title="Editar coleção">' +
-        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
-      '</button>' +
-      '<span class="col-delete-anchor" data-col-slug="' + col.slug + '"></span>' +
-    '</div>';
-
-  // Clique no card abre modal de visualização
-  card.querySelector('.col-card-body').addEventListener('click', function () {
-    colOpenCollection(col);
-  });
-  card.querySelector('.col-card-tags').addEventListener('click', function () {
-    colOpenCollection(col);
-  });
-
-  // Botão editar metadados
-  card.querySelector('.btn-edit-icon').addEventListener('click', function (e) {
-    e.stopPropagation();
-    if (typeof colOpenEditModal === 'function') colOpenEditModal(col);
-  });
-
-  return card;
-}
-
-/* ── Abrir coleção ──────────────────────────────────────────────────── */
-
-function colOpenCollection(col) {
-  if (typeof colOpenCollectionModal === 'function') colOpenCollectionModal(col);
-}
-
-/* ── Hook na busca global ───────────────────────────────────────────── */
-
-function _hookSearchInput() {
-  var input = document.getElementById('searchInput');
-  if (!input) return;
-  var _t;
-  input.addEventListener('input', function () {
-    if (getActiveTab() !== 'colecoes') return;
-    clearTimeout(_t);
-    var q = this.value.trim();
-    _t = setTimeout(function () {
-      colState.search = q;
+  function bindSearch() {
+    var search = $('searchInput');
+    if (!search) return;
+    search.addEventListener('input', function () {
+      var colDashboard = $('colDashboard');
+      if (!colDashboard || colDashboard.style.display === 'none') return;
+      colState.search = search.value;
       colRenderGrid();
-    }, 150);
-  });
-}
+    });
+  }
 
-/* ── Marcar grid como sujo (chamar após criar/editar/excluir coleção) ── */
-function colMarkGridDirty() { _colGridDirty = true; }
+  function init() {
+    initTabs();
+    initDashboard();
+    bindSearch();
+  }
+
+  global.colSwitchTab = colSwitchTab;
+  global.colRenderGrid = colRenderGrid;
+  global.colCreateCard = colCreateCard;
+  global.colOpenCollection = colOpenCollection;
+
+  document.addEventListener('DOMContentLoaded', init);
+}(window));

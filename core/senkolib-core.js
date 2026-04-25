@@ -1,74 +1,60 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   senkolib-core.js — Motor de registro de layouts e variantes em memória
+/*
+ * SenkoLib core
+ * Responsabilidade: manter o registro em memoria dos layouts e variantes.
+ * Dependencias: nenhuma.
+ * Expoe: window.SenkoLib.register/getAll/remove/registerVariant/getVariants.
+ */
+(function (global) {
+  var _layouts = [];
+  var _variants = {};
 
-   RESPONSABILIDADE:
-     Mantém o registro central de todos os layouts e suas variantes.
-     Expõe a API global SenkoLib para que arquivos de layout/variante
-     registrem seus dados, e que a UI consulte o catálogo.
+  function normalizeKey(value) {
+    return String(value || '').toLowerCase();
+  }
 
-   EXPÕE (globais):
-     SenkoLib.register(arr)                   → void
-     SenkoLib.getAll()                         → Array<Layout>
-     SenkoLib.registerVariant(layoutId, arr)  → void
-     SenkoLib.getVariants(layoutId)           → Array<Variant>
+  function cloneArray(arr) {
+    return arr ? arr.slice(0) : [];
+  }
 
-   DEPENDÊNCIAS:
-     Nenhuma — deve ser o primeiro script carregado.
-
-   ORDEM DE CARREGAMENTO:
-     1º script no index.html
-═══════════════════════════════════════════════════════════════════════ */
-
-var SenkoLib = (function () {
-  'use strict';
-
-  /* ── Armazenamento privado ──────────────────────────────────────── */
-  var _layouts  = [];
-  var _variants = {}; // { 'section-1': [ {name, html, css}, ... ] }
-
-  /* ── Layouts ────────────────────────────────────────────────────── */
-
-  // Adiciona um array de layouts ao registro; duplicatas por id são ignoradas
   function register(arr) {
-    if (!Array.isArray(arr)) return;
-    arr.forEach(function (layout) {
-      if (!layout || !layout.id) return;
-      var exists = _layouts.some(function (l) { return l.id === layout.id; });
-      if (!exists) _layouts.push(layout);
-    });
+    var i;
+    if (!arr || !arr.length) return;
+
+    for (i = 0; i < arr.length; i += 1) {
+      if (arr[i] && arr[i].id) {
+        _layouts.push(arr[i]);
+      }
+    }
   }
 
-  // Retorna cópia do array completo de layouts registrados
   function getAll() {
-    return _layouts.slice();
+    return cloneArray(_layouts);
   }
 
-  /* ── Variantes ──────────────────────────────────────────────────── */
-
-  // Registra variantes para um layout (identificado pelo id em lowercase)
-  function registerVariant(layoutId, arr) {
-    if (!layoutId || !Array.isArray(arr)) return;
-    var key = layoutId.toLowerCase();
-    if (!_variants[key]) _variants[key] = [];
-    arr.forEach(function (v) {
-      if (!v || !v.name) return;
-      var exists = _variants[key].some(function (x) { return x.name === v.name; });
-      if (!exists) _variants[key].push(v);
-    });
+  function remove(id) {
+    var i;
+    for (i = _layouts.length - 1; i >= 0; i -= 1) {
+      if (_layouts[i] && _layouts[i].id === id) {
+        _layouts.splice(i, 1);
+      }
+    }
   }
 
-  // Retorna variantes de um layout; busca pelo id em lowercase
-  function getVariants(layoutId) {
-    if (!layoutId) return [];
-    var key = layoutId.toLowerCase();
-    return (_variants[key] || []).slice();
+  function registerVariant(layoutName, arr) {
+    var key = normalizeKey(layoutName);
+    if (!key) return;
+    _variants[key] = cloneArray(arr);
   }
 
-  /* ── API pública ────────────────────────────────────────────────── */
-  return {
-    register:        register,
-    getAll:          getAll,
+  function getVariants(layoutName) {
+    return cloneArray(_variants[normalizeKey(layoutName)]);
+  }
+
+  global.SenkoLib = {
+    register: register,
+    getAll: getAll,
+    remove: remove,
     registerVariant: registerVariant,
-    getVariants:     getVariants,
+    getVariants: getVariants
   };
-}());
+}(window));
